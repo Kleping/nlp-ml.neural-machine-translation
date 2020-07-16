@@ -1,11 +1,10 @@
 import numpy as np
-import keras as k
 from classes import constant
-
+import tensorflow as tf
 from classes.auxiliary import split_with_keep_delimiters
 
 
-class DataSupplier(k.utils.Sequence):
+class DataSupplier(tf.keras.utils.Sequence):
     def __init__(self, batch_size, sentences, voc, voc_size):
         self.batch_size = batch_size
         self.sentences = sentences

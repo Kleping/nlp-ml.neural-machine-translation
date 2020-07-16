@@ -1,6 +1,4 @@
 import random
-import os
-import keras as k
 from classes import constant
 from classes.DataSupplier import DataSupplier
 from classes.auxiliary import get_lines, linear_regression_equality, get_vocabulary, \
@@ -36,27 +34,28 @@ def compile_model(model):
 
 
 def create_model(n_input, n_units):
-    encoder_input = k.Input(shape=(None, n_input,))
-    encoder = k.layers.LSTM(n_units, return_sequences=True, return_state=True)
+    import tensorflow as tf
+    encoder_input = tf.keras.layers.Input(shape=(None, n_input,))
+    encoder = tf.keras.layers.LSTM(n_units, return_sequences=True, return_state=True)
     encoder_output, state_h, state_c = encoder(encoder_input)
     encoder_states = [state_h, state_c]
 
-    decoder_input = k.Input(shape=(None, n_input,))
-    decoder = k.layers.LSTM(n_units, return_sequences=True)
+    decoder_input = tf.keras.layers.Input(shape=(None, n_input,))
+    decoder = tf.keras.layers.LSTM(n_units, return_sequences=True)
     decoder_output = decoder(decoder_input, initial_state=encoder_states)
 
-    # decoder_dense = K.layers.Dense(n_input, activation="softmax")
+    # seq2seq
+    # decoder_dense = tf.keras.layers.Dense(n_input, activation="softmax")
     # output = decoder_dense(decoder_output)
 
-    attention = k.layers.dot([decoder_output, encoder_output], axes=(2, 2))
-    attention = k.layers.Activation('softmax', name='attention')(attention)
-    context = k.layers.dot([attention, encoder_output], axes=(2, 1))
-    decoder_combined_context = k.layers.concatenate([context, decoder_output])
+    #seq2seq with attention
+    context = tf.keras.layers.Attention()([encoder_output, decoder_output])
+    decoder_combined_context = tf.keras.layers.concatenate([context, decoder_output])
 
-    output = k.layers.TimeDistributed(k.layers.Dense(n_units, activation="relu"))(decoder_combined_context)
-    output = k.layers.TimeDistributed(k.layers.Dense(n_input, activation="softmax"))(output)
+    output = tf.keras.layers.TimeDistributed(tf.keras.layers.Dense(n_units, activation="relu"))(decoder_combined_context)
+    output = tf.keras.layers.TimeDistributed(tf.keras.layers.Dense(n_input, activation="softmax"))(output)
 
-    model = k.Model([encoder_input, decoder_input], output)
+    model = tf.keras.Model([encoder_input, decoder_input], output)
     model = compile_model(model)
     return model
 
@@ -85,7 +84,7 @@ def print_model_predictions():
 
 
 def train_model():
-    (train_data, validation_data), (steps_per_epoch, validation_steps), (voc, voc_size) = get_data(.15, True, .2)
+    (train_data, validation_data), (steps_per_epoch, validation_steps), (voc, voc_size) = get_data(.02, True, .2)
     model = create_model(voc_size, constant.LATENT_DIMENSIONS)
 
     model.fit_generator(generator=train_data,
@@ -146,9 +145,8 @@ def read_graph():
         loaded = graph_def.ParseFromString(f.read())
     return loaded
 
-
 # if os.path.isfile('./' + constant.MODEL_NAME):
-# convert_to_tf_lite('model.tflite')
 # write_graph()
 # graph = read_graph()
-# train_model()
+train_model()
+convert_to_tf_lite('models/model.tflite')
