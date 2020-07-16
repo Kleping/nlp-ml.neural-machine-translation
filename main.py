@@ -62,7 +62,7 @@ def create_model(n_input, n_units):
 
 def restore_model():
     import keras
-    model = keras.models.load_model(constant.MODEL_NAME, compile=False)
+    model = keras.models.load_model(constant.MODEL_PATH, compile=False)
     return compile_model(model)
 
 
@@ -96,14 +96,13 @@ def train_model():
                         use_multiprocessing=False,
                         shuffle=True)
 
-    model.save(constant.MODEL_NAME)
+    model.save(constant.MODEL_PATH)
 
 
 def get_concrete_function():
     import tensorflow as tf
-    from tensorflow.python import keras as tf_k
 
-    model = tf_k.models.load_model(constant.MODEL_NAME, compile=False)
+    model = tf.keras.models.load_model(constant.MODEL_PATH, compile=False)
     compile_model(model)
 
     full_model = tf.function(lambda x: model(x))
@@ -133,20 +132,21 @@ def write_graph():
     frozen_func.graph.as_graph_def()
 
     tf.io.write_graph(graph_or_graph_def=frozen_func.graph,
-                      logdir="./frozen_models",
-                      name="simple_frozen_graph.pb",
+                      logdir="./models",
+                      name=constant.MODEL_NAME + '.pb',
                       as_text=False)
 
 
 def read_graph():
     import tensorflow as tf
-    with tf.io.gfile.GFile('./frozen_models/simple_frozen_graph.pb', "rb") as f:
+    with tf.io.gfile.GFile('./models/' + constant.MODEL_NAME + '.pb', "rb") as f:
         graph_def = tf.compat.v1.GraphDef()
         loaded = graph_def.ParseFromString(f.read())
     return loaded
 
-# if os.path.isfile('./' + constant.MODEL_NAME):
 # write_graph()
 # graph = read_graph()
-train_model()
+# train_model()
+
+
 convert_to_tf_lite('models/model.tflite')

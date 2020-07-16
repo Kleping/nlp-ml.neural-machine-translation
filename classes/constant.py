@@ -4,7 +4,8 @@ VOCABULARY_PUNCTUATION = ['!', '?', '.', ',']
 DATA_SUFFIXES = ['one', 'two', 'three']
 SENTINELS = ['^', '~']
 
-MODEL_NAME = 'models/encoder_decoder_model.h5'
+MODEL_NAME = 'encoder_decoder_model'
+MODEL_PATH = 'models/' + MODEL_NAME + '.h5'
 DATA_NAME = 'data/original.txt'
 
 SHIFTED_SEQ_COUNT = 1
