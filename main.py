@@ -4,7 +4,7 @@ import tensorflow as tf
 from classes import constant
 from classes.DataSupplier import DataSupplier
 from classes.auxiliary import get_lines, linear_regression_equality, get_vocabulary, \
-                              split_data, calculate_steps, seq_to_text
+                              split_data, calculate_steps, seq_to_text, split_with_keep_delimiters
 
 
 def get_data(count_coefficient, shuffle, split_coefficient):
@@ -13,18 +13,30 @@ def get_data(count_coefficient, shuffle, split_coefficient):
         normalized_data = get_lines('data/normalized/eng_' + suffix + '.txt', lambda l: l[:-1])
         incomplete_data = get_lines('data/incomplete/eng_' + suffix + '.txt', lambda l: l[:-1])
 
+        concatenated_data = normalized_data + incomplete_data
+        found_length = max([len(split_with_keep_delimiters(sentence, [' '])) for sentence in concatenated_data])
+        if found_length > constant.MAX_SEQUENCE:
+            constant.MAX_SEQUENCE = found_length
+
         normalized_data = normalized_data[:int(len(normalized_data) * count_coefficient)]
         incomplete_data = incomplete_data[:int(len(incomplete_data) * count_coefficient)]
         data[suffix] = normalized_data + incomplete_data
 
+    constant.MAX_SEQUENCE += len(constant.SENTINELS)
     if shuffle is True:
         [random.shuffle(data[k]) for k in data]
 
     voc, voc_size = get_vocabulary(data)
+
     train, validation = split_data(data, split_coefficient)
     validation_generator = DataSupplier(constant.BATCH_SIZE, validation, voc, voc_size)
     generator = DataSupplier(constant.BATCH_SIZE, train, voc, voc_size)
-    print('Data', str(len(train)) + '/' + str(len(validation)), voc_size)
+
+    print('\ndata(' + str(len(train)) + ', ' + str(len(validation)) + '),',
+          'voc_size(' + str(voc_size) + '),',
+          'max_sequence(' + str(constant.MAX_SEQUENCE) + ')\n',
+          'voc(' + str(voc) + ')\n')
+
     return (generator, validation_generator), calculate_steps(train, validation), (voc, voc_size)
 
 
