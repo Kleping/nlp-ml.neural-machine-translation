@@ -4,7 +4,7 @@ VOCABULARY_PUNCTUATION = ['!', '?', '.', ',']
 DATA_SUFFIXES = ['one', 'two', 'three']
 SENTINELS = ['^', '~']
 
-MODEL_NAME = 'encoder_decoder_model'
+MODEL_NAME = 'seq2seq_with_attention'
 MODEL_PATH = 'models/' + MODEL_NAME + '.h5'
 DATA_NAME = 'data/original.txt'
 
