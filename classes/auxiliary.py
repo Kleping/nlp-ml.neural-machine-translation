@@ -1,7 +1,6 @@
 import re
 import numpy as np
 from classes import constant
-import keras as k
 import random
 
 
@@ -65,8 +64,9 @@ def decode_sequence(input_seq, encoder_model, decoder_model, vocabulary, vocabul
 
 
 def linear_regression_equality(y_true, y_pred):
-    diff = k.backend.abs(y_true - y_pred)
-    return k.backend.mean(k.backend.cast(diff < constant.ACCEPTED_DIFF, 'float32'))
+    import tensorflow as tf
+    diff = tf.keras.backend.abs(y_true - y_pred)
+    return tf.keras.backend.mean(tf.keras.backend.cast(diff < constant.ACCEPTED_DIFF, 'float32'))
 
 
 def get_vocabulary(data):

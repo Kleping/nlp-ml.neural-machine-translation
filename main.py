@@ -1,4 +1,6 @@
 import random
+import tensorflow as tf
+
 from classes import constant
 from classes.DataSupplier import DataSupplier
 from classes.auxiliary import get_lines, linear_regression_equality, get_vocabulary, \
@@ -19,8 +21,6 @@ def get_data(count_coefficient, shuffle, split_coefficient):
         [random.shuffle(data[k]) for k in data]
 
     voc, voc_size = get_vocabulary(data)
-    # print(max([max([len(sentence.split()) for sentence in data[k]]) for k in data]))
-
     train, validation = split_data(data, split_coefficient)
     validation_generator = DataSupplier(constant.BATCH_SIZE, validation, voc, voc_size)
     generator = DataSupplier(constant.BATCH_SIZE, train, voc, voc_size)
@@ -34,7 +34,6 @@ def compile_model(model):
 
 
 def create_model(n_input, n_units):
-    import tensorflow as tf
     encoder_input = tf.keras.layers.Input(shape=(None, n_input,))
     encoder = tf.keras.layers.LSTM(n_units, return_sequences=True, return_state=True)
     encoder_output, state_h, state_c = encoder(encoder_input)
@@ -51,7 +50,6 @@ def create_model(n_input, n_units):
     #seq2seq with attention
     context = tf.keras.layers.Attention()([encoder_output, decoder_output])
     decoder_combined_context = tf.keras.layers.concatenate([context, decoder_output])
-
     output = tf.keras.layers.TimeDistributed(tf.keras.layers.Dense(n_units, activation="relu"))(decoder_combined_context)
     output = tf.keras.layers.TimeDistributed(tf.keras.layers.Dense(n_input, activation="softmax"))(output)
 
@@ -61,8 +59,7 @@ def create_model(n_input, n_units):
 
 
 def restore_model():
-    import keras
-    model = keras.models.load_model(constant.MODEL_PATH, compile=False)
+    model = tf.keras.models.load_model(constant.MODEL_PATH, compile=False)
     return compile_model(model)
 
 
@@ -84,7 +81,7 @@ def print_model_predictions():
 
 
 def train_model():
-    (train_data, validation_data), (steps_per_epoch, validation_steps), (voc, voc_size) = get_data(.02, True, .2)
+    (train_data, validation_data), (steps_per_epoch, validation_steps), (voc, voc_size) = get_data(.15, True, .2)
     model = create_model(voc_size, constant.LATENT_DIMENSIONS)
 
     model.fit_generator(generator=train_data,
@@ -146,7 +143,6 @@ def read_graph():
 
 # write_graph()
 # graph = read_graph()
-# train_model()
-
-
-convert_to_tf_lite('models/model.tflite')
+train_model()
+# print_model_predictions()
+# convert_to_tf_lite('models/model.tflite')
