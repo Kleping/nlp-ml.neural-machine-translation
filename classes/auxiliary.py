@@ -1,7 +1,8 @@
 import re
 import numpy as np
-from classes import constant
 import random
+
+from classes.constant import MAX_SEQUENCE, SENTINELS, ACCEPTED_DIFF, BATCH_SIZE
 
 
 def get_lines(path, formatted):
@@ -15,26 +16,32 @@ def split_with_keep_delimiters(string, delimiters):
     return re.split('(' + '|'.join(map(re.escape, delimiters)) + ')', string)
 
 
-def seq_to_text(encoded_input, voc):
-    return ''.join([voc[np.argmax(encoded_input[0, i, :])] for i in range(len(encoded_input[0]))])
+def tokenize_sequence(seq):
+    return seq.split()
 
 
-def punctuation_translate(x):
-    return x.translate({ord(i): '' for i in constant.VOCABULARY_PUNCTUATION})
+def encode_seq(seq, voc):
+    encoded_input = np.zeros((MAX_SEQUENCE, len(voc)), dtype='float32')
+    for i in range(len(seq)):
+        c = voc.index(seq[i])
+        # a number of sample, an index of position in the current sentence,
+        # an index of character in the vocabulary
+        encoded_input[i, c] = 1.
+    return encoded_input
 
 
-def find_max_sequence(samples):
-    return max([len(sample) for sample in samples])
+def seq_to_tokens(seq, voc):
+    return [voc[np.argmax(seq[i, :])] for i in range(len(seq))]
 
 
-def decode_sequence(input_seq, encoder_model, decoder_model, vocabulary, vocabulary_len):
+def decode_seq(input_seq, encoder_model, decoder_model, voc):
     # Encode the input as state vectors.
     states_value = encoder_model.predict(input_seq)
 
     # Generate empty target sequence of length 1.
-    target_seq = np.zeros((1, 1, vocabulary_len))
+    target_seq = np.zeros((1, 1, len(voc)))
     # Populate the first character of target sequence with the start character.
-    target_seq[0, 0, vocabulary.index(constant.SENTINELS[0])] = 1.
+    target_seq[0, 0, voc.index(SENTINELS[0])] = 1.
 
     # Sampling loop for a batch of sequences
     # (to simplify, here we assume a batch of size 1).
@@ -45,16 +52,16 @@ def decode_sequence(input_seq, encoder_model, decoder_model, vocabulary, vocabul
 
         # Sample a token
         sampled_token_index = np.argmax(output_tokens[0, -1, :])
-        sampled_char = vocabulary[sampled_token_index]
-        decoded_sentence += sampled_char
+        sampled_token = voc[sampled_token_index]
+        decoded_sentence += sampled_token
 
         # Exit condition: either hit max length
         # or find stop character.
-        if sampled_char == constant.SENTINELS[1] or len(decoded_sentence) > constant.MAX_SEQUENCE:
+        if sampled_token == SENTINELS[1] or len(decoded_sentence) > MAX_SEQUENCE:
             stop_condition = True
 
         # Update the target sequence (of length 1).
-        target_seq = np.zeros((1, 1, vocabulary_len))
+        target_seq = np.zeros((1, 1, len(voc)))
         target_seq[0, 0, sampled_token_index] = 1.
 
         # Update states
@@ -66,17 +73,16 @@ def decode_sequence(input_seq, encoder_model, decoder_model, vocabulary, vocabul
 def linear_regression_equality(y_true, y_pred):
     import tensorflow as tf
     diff = tf.keras.backend.abs(y_true - y_pred)
-    return tf.keras.backend.mean(tf.keras.backend.cast(diff < constant.ACCEPTED_DIFF, 'float32'))
+    return tf.keras.backend.mean(tf.keras.backend.cast(diff < ACCEPTED_DIFF, 'float32'))
 
 
-def get_vocabulary(data):
-    voc = constant.SENTINELS
+def get_voc(data):
+    voc = SENTINELS
     delimiters = [' ']
     for k in data:
         [[voc.append(w) for w in split_with_keep_delimiters(s, delimiters) if w not in voc] for s in data[k]]
     voc = sorted(voc)
-    voc_size = len(voc)
-    return voc, voc_size
+    return voc
 
 
 def split_data(data, coefficient):
@@ -95,6 +101,6 @@ def split_data(data, coefficient):
 
 
 def calculate_steps(train, validation):
-    steps_per_epoch = int(len(train) // constant.BATCH_SIZE)
-    validation_steps = int(len(validation) // constant.BATCH_SIZE)
+    steps_per_epoch = int(len(train) // BATCH_SIZE)
+    validation_steps = int(len(validation) // BATCH_SIZE)
     return steps_per_epoch, validation_steps
