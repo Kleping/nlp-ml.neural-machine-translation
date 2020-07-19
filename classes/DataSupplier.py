@@ -1,8 +1,9 @@
 import numpy as np
 import tensorflow as tf
+import random
 
 from classes.constant import MAX_SEQUENCE, SENTINELS, VOCABULARY_PUNCTUATION
-from classes.auxiliary import tokenize_sequence, encode_seq, seq_to_tokens
+from classes.auxiliary import tokenize_sequence, encode_seq, decompose_tokens, clothe_to, seq_to_tokens
 
 
 class DataSupplier(tf.keras.utils.Sequence):
@@ -35,20 +36,14 @@ class DataSupplier(tf.keras.utils.Sequence):
 
         for n in range(len(cluster)):
             tokens = tokenize_sequence(cluster[n])
-            tokens.insert(0, SENTINELS[0])
-            tokens.append(SENTINELS[1])
+            tokens_without_punctuation = [i for i in tokens if i not in VOCABULARY_PUNCTUATION]
+            tokens = clothe_to(tokens, SENTINELS)
 
-            for i in range(len(tokens)):
-                c = self.voc.index(tokens[i])
-                # a number of sample, an index of position in the current sentence,
-                # an index of character in the vocabulary
-                decoded_output[n, i, c] = 1.
+            decoded_output[n] = encode_seq(tokens, self.voc)
 
-                # a number of sample, an index of shifted position in the current sentence,
-                # an index of character in the vocabulary
-                decoded_input[n, i + 1, c] = 1.
+            a = np.insert(decoded_output[n], 0, np.zeros(self.voc_size, dtype='float32'))
+            decoded_input[n] = a[:-self.voc_size].reshape((MAX_SEQUENCE, self.voc_size))
 
-            seq_without_punctuation = [i for i in tokens if i not in VOCABULARY_PUNCTUATION]
-            encoded_input[n] = encode_seq(seq_without_punctuation, self.voc)
+            encoded_input[n] = encode_seq(tokens_without_punctuation, self.voc)
 
         return [encoded_input, decoded_input], decoded_output

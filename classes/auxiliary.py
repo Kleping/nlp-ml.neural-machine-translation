@@ -30,6 +30,21 @@ def encode_seq(seq, voc):
     return encoded_input
 
 
+def decompose_tokens(tokens, shuffle):
+    decomposed = list()
+    for i, token in enumerate(tokens):
+        decomposed.append(tokens[:i+1])
+    if shuffle:
+        random.shuffle(decomposed)
+    return decomposed
+
+
+def clothe_to(str_list, symbols):
+    str_list.insert(0, symbols[0])
+    str_list.append(symbols[1])
+    return str_list
+
+
 def seq_to_tokens(seq, voc):
     return [voc[np.argmax(seq[i, :])] for i in range(len(seq))]
 
