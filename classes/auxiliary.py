@@ -21,13 +21,9 @@ def tokenize_sequence(seq):
 
 
 def encode_seq(seq, voc):
-    encoded_input = np.zeros((MAX_SEQUENCE, len(voc)), dtype='float32')
-    for i in range(len(seq)):
-        c = voc.index(seq[i])
-        # a number of sample, an index of position in the current sentence,
-        # an index of character in the vocabulary
-        encoded_input[i, c] = 1.
-    return encoded_input
+    d_type = 'int32'
+    arr = np.array([voc.index(seq[i]) for i in range(len(seq))], dtype=d_type)
+    return np.append(arr, np.zeros(shape=MAX_SEQUENCE - len(seq), dtype=d_type))
 
 
 def decompose_tokens(tokens, shuffle):
@@ -40,49 +36,40 @@ def decompose_tokens(tokens, shuffle):
 
 
 def clothe_to(str_list, symbols):
-    str_list.insert(0, symbols[0])
-    str_list.append(symbols[1])
-    return str_list
+    new_list = list(str_list)
+    new_list.insert(0, symbols[0])
+    new_list.append(symbols[1])
+    return new_list
 
 
 def seq_to_tokens(seq, voc):
-    return [voc[np.argmax(seq[i, :])] for i in range(len(seq))]
+    return [voc[seq[i]] for i in range(len(seq))]
 
 
 def decode_seq(input_seq, encoder_model, decoder_model, voc):
-    # Encode the input as state vectors.
-    states_value = encoder_model.predict(input_seq)
-
-    # Generate empty target sequence of length 1.
+    encoder_output, encoder_state = encoder_model.predict(np.expand_dims(input_seq, axis=0))
     target_seq = np.zeros((1, 1, len(voc)))
-    # Populate the first character of target sequence with the start character.
     target_seq[0, 0, voc.index(SENTINELS[0])] = 1.
 
-    # Sampling loop for a batch of sequences
-    # (to simplify, here we assume a batch of size 1).
     stop_condition = False
-    decoded_sentence = ''
+    decoded_tokens = list()
     while not stop_condition:
-        output_tokens, h, c = decoder_model.predict([target_seq] + states_value)
+        x = len(decoded_tokens) + 1
+        output_tokens, h, c = decoder_model.predict([target_seq, encoder_output, encoder_state])
 
-        # Sample a token
         sampled_token_index = np.argmax(output_tokens[0, -1, :])
         sampled_token = voc[sampled_token_index]
-        decoded_sentence += sampled_token
+        decoded_tokens.append(sampled_token)
 
-        # Exit condition: either hit max length
-        # or find stop character.
-        if sampled_token == SENTINELS[1] or len(decoded_sentence) > MAX_SEQUENCE:
+        if sampled_token == SENTINELS[1] or len(decoded_tokens) > MAX_SEQUENCE:
             stop_condition = True
 
-        # Update the target sequence (of length 1).
-        target_seq = np.zeros((1, 1, len(voc)))
+        # target_seq = np.zeros((1, 1, len(voc)))
         target_seq[0, 0, sampled_token_index] = 1.
 
-        # Update states
-        states_value = [h, c]
+        encoder_state = [h, c]
 
-    return decoded_sentence
+    return decoded_tokens
 
 
 def linear_regression_equality(y_true, y_pred):
@@ -91,11 +78,11 @@ def linear_regression_equality(y_true, y_pred):
     return tf.keras.backend.mean(tf.keras.backend.cast(diff < ACCEPTED_DIFF, 'float32'))
 
 
-def get_voc(data):
+def get_voc(sequences):
     voc = SENTINELS
     delimiters = [' ']
-    for k in data:
-        [[voc.append(w) for w in split_with_keep_delimiters(s, delimiters) if w not in voc] for s in data[k]]
+    for k in sequences:
+        [[voc.append(w) for w in split_with_keep_delimiters(s, delimiters) if w not in voc] for s in sequences[k]]
     voc = sorted(voc)
     return voc
 

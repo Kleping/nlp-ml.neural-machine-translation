@@ -13,6 +13,8 @@ class DataSupplier(tf.keras.utils.Sequence):
 
         self.voc_size = len(voc)
         self.voc = voc
+        self.d_type = 'int32'
+        self.input_length = MAX_SEQUENCE
 
         self.on_epoch_end()
 
@@ -27,23 +29,27 @@ class DataSupplier(tf.keras.utils.Sequence):
         self.indexes = np.arange(len(self.sentences))
         np.random.shuffle(self.indexes)
 
+    def get_batched_container(self):
+        return np.zeros((self.batch_size, self.input_length), dtype=self.d_type)
+
     def __data_generation(self, indexes):
-        encoded_input = np.zeros((self.batch_size, MAX_SEQUENCE, self.voc_size), dtype='float32')
-        decoded_input = np.zeros((self.batch_size, MAX_SEQUENCE, self.voc_size), dtype='float32')
-        decoded_output = np.zeros((self.batch_size, MAX_SEQUENCE, self.voc_size), dtype='float32')
+        encoder = self.get_batched_container()
+        decoder = self.get_batched_container()
+        output  = self.get_batched_container()
 
         cluster = [self.sentences[i] for i in indexes]
 
         for n in range(len(cluster)):
             tokens = tokenize_sequence(cluster[n])
-            tokens_without_punctuation = [i for i in tokens if i not in VOCABULARY_PUNCTUATION]
-            tokens = clothe_to(tokens, SENTINELS)
+            encoded_seq = encode_seq(tokens, self.voc)
 
-            decoded_output[n] = encode_seq(tokens, self.voc)
+            encoder [n] = encode_seq([i for i in tokens if i not in VOCABULARY_PUNCTUATION], self.voc)
+            decoder [n] = np.insert(encoded_seq[:-1], 0, self.voc.index(SENTINELS[0]))
+            output  [n] = np.insert(encoded_seq[:-1], len(tokens), self.voc.index(SENTINELS[1]))
 
-            a = np.insert(decoded_output[n], 0, np.zeros(self.voc_size, dtype='float32'))
-            decoded_input[n] = a[:-self.voc_size].reshape((MAX_SEQUENCE, self.voc_size))
+            # these arrays are only for test a structure representation of the data
+            # encoded_test = seq_to_tokens(encoder [n], self.voc)
+            # decoded_test = seq_to_tokens(decoder [n], self.voc)
+            # output_test  = seq_to_tokens(output  [n], self.voc)
 
-            encoded_input[n] = encode_seq(tokens_without_punctuation, self.voc)
-
-        return [encoded_input, decoded_input], decoded_output
+        return [encoder, decoder], output
