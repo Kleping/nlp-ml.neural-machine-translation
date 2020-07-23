@@ -32,10 +32,13 @@ class DataSupplier(tf.keras.utils.Sequence):
     def get_batched_container(self):
         return np.zeros((self.batch_size, self.input_length), dtype=self.d_type)
 
+    def get_batched_output_container(self):
+        return np.zeros((self.batch_size, self.input_length, self.voc_size), dtype=self.d_type)
+
     def __data_generation(self, indexes):
         encoder = self.get_batched_container()
         decoder = self.get_batched_container()
-        output  = self.get_batched_container()
+        output  = self.get_batched_output_container()
 
         cluster = [self.sentences[i] for i in indexes]
 
@@ -45,11 +48,16 @@ class DataSupplier(tf.keras.utils.Sequence):
 
             encoder [n] = encode_seq([i for i in tokens if i not in VOCABULARY_PUNCTUATION], self.voc)
             decoder [n] = np.insert(encoded_seq[:-1], 0, self.voc.index(SENTINELS[0]))
-            output  [n] = np.insert(encoded_seq[:-1], len(tokens), self.voc.index(SENTINELS[1]))
+            pre_output  = np.insert(encoded_seq[:-1], len(tokens), self.voc.index(SENTINELS[1]))
 
             # these arrays are only for test a structure representation of the data
-            # encoded_test = seq_to_tokens(encoder [n], self.voc)
-            # decoded_test = seq_to_tokens(decoder [n], self.voc)
-            # output_test  = seq_to_tokens(output  [n], self.voc)
+            encoded_test = seq_to_tokens(encoder [n], self.voc)
+            decoded_test = seq_to_tokens(decoder [n], self.voc)
+            output_test  = seq_to_tokens(pre_output , self.voc)
+
+            for p, i in enumerate(pre_output):
+                if i == 0:
+                    break
+                output[n][p][i] = 1.
 
         return [encoder, decoder], output
