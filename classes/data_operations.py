@@ -24,7 +24,7 @@ def get_raw_data(count_coefficient, decompose, assign_max_sequence=False):
                 decomposed_sequences = decompose_tokens(tokenize_sequence(seq), False)[:-1]
                 [sequences.append(' '.join(tokens)) for tokens in decomposed_sequences]
 
-        # random.shuffle(sequences)
+        random.shuffle(sequences)
         raw_data[suffix] = sequences[:int(len(sequences) * count_coefficient)]
 
     if assign_max_sequence:
