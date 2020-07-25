@@ -48,16 +48,15 @@ def seq_to_tokens(seq, voc):
 
 def decode_seq(input_seq, encoder_model, decoder_model, voc):
     encoder_output, encoder_state = encoder_model.predict(np.expand_dims(input_seq, axis=0))
-    target_seq = np.zeros((1, 1, len(voc)))
-    target_seq[0, 0, voc.index(SENTINELS[0])] = 1.
+    target_seq = np.zeros((1, MAX_SEQUENCE))
+    target_seq[0, 0] = voc.index(SENTINELS[0])
 
     stop_condition = False
     decoded_tokens = list()
     while not stop_condition:
-        x = len(decoded_tokens) + 1
         output_tokens, h, c = decoder_model.predict([target_seq, encoder_output, encoder_state])
 
-        sampled_token_index = np.argmax(output_tokens[0, -1, :])
+        sampled_token_index = np.argmax(output_tokens[0, len(decoded_tokens)+1, :])
         sampled_token = voc[sampled_token_index]
         decoded_tokens.append(sampled_token)
 
@@ -65,7 +64,7 @@ def decode_seq(input_seq, encoder_model, decoder_model, voc):
             stop_condition = True
 
         # target_seq = np.zeros((1, 1, len(voc)))
-        target_seq[0, 0, sampled_token_index] = 1.
+        target_seq[0, len(decoded_tokens)] = sampled_token_index
 
         encoder_state = [h, c]
 

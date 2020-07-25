@@ -1,6 +1,6 @@
 import random
 
-from classes.constant import MODEL_PATH, LATENT_DIMENSIONS, EPOCHS, MAX_SEQUENCE
+from classes.constant import MODEL_PATH, LATENT_DIMENSIONS, EPOCHS
 from classes.model_definition import restore_model, create_model
 from classes.auxiliary import get_voc, encode_seq, decode_seq, tokenize_sequence
 from classes.data_operations import get_raw_data, get_fit_data
