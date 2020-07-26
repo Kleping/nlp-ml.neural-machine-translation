@@ -10,6 +10,7 @@ latent_dim = 256  # Latent dimensionality of the encoding space.
 num_samples = 10000  # Number of samples to train on.
 # Path to the data txt file on disk.
 data_path = "data/pnc-eng.txt"
+model_name = 'seq2seq_with_attention'
 
 #%%
 
@@ -78,27 +79,33 @@ for i, (input_text, target_text) in enumerate(zip(input_texts, target_texts)):
 
 # Define sampling models
 # Restore the model and construct the encoder and decoder.
-model = tf.keras.models.load_model("models/seq2seq.h5")
+model = tf.keras.models.load_model("models/" + model_name + ".h5")
+encoder_input = model.inputs[0]
+encoder_output, state_h, state_c = model.layers[2].output
+encoder_model = tf.keras.Model(encoder_input, [encoder_output] + [state_h, state_c])
 
-encoder_inputs = model.input[0]  # input_1
-encoder_outputs, state_h_enc, state_c_enc = model.layers[2].output  # lstm_1
-encoder_states = [state_h_enc, state_c_enc]
-encoder_model = tf.keras.Model(encoder_inputs, encoder_states)
-
-decoder_inputs = model.input[1]  # input_2
+decoder_input = model.inputs[1]
 decoder_state_input_h = tf.keras.Input(shape=(latent_dim,), name="input_3")
 decoder_state_input_c = tf.keras.Input(shape=(latent_dim,), name="input_4")
+encoder_stack_h = tf.keras.Input(shape=(None, latent_dim,), name="input_5")
 decoder_states_inputs = [decoder_state_input_h, decoder_state_input_c]
-decoder_lstm = model.layers[3]
-decoder_outputs, state_h_dec, state_c_dec = decoder_lstm(
-    decoder_inputs, initial_state=decoder_states_inputs
+decoder = model.layers[3]
+decoder_stack_h, decoder_last_h, decoder_last_c = decoder(
+    decoder_input, initial_state=decoder_states_inputs
 )
-decoder_states = [state_h_dec, state_c_dec]
-decoder_dense = model.layers[4]
-decoder_outputs = decoder_dense(decoder_outputs)
+decoder_attention = model.layers[4]
+decoder_concatenate = model.layers[5]
+decoder_dense = model.layers[6]
+
+decoder_last = [decoder_last_h, decoder_last_c]
+context = decoder_attention([decoder_stack_h, encoder_stack_h])
+
+decoder_stack_h = decoder_dense(tf.keras.layers.concatenate([context, decoder_stack_h]))
 decoder_model = tf.keras.Model(
-    [decoder_inputs] + decoder_states_inputs, [decoder_outputs] + decoder_states
+    [decoder_input, encoder_stack_h, decoder_states_inputs],
+    [decoder_stack_h] + decoder_last
 )
+print(decoder_model.summary())
 
 #%%
 
@@ -110,8 +117,8 @@ reverse_target_char_index = dict((i, char) for char, i in target_token_index.ite
 
 def decode_sequence(input_seq):
     # Encode the input as state vectors.
-    states_value = encoder_model.predict(input_seq)
-
+    encoder_outputs, h, c = encoder_model.predict(input_seq)
+    states_value = [h, c]
     # Generate empty target sequence of length 1.
     target_seq = np.zeros((1, 1, num_decoder_tokens))
     # Populate the first character of target sequence with the start character.
@@ -122,7 +129,8 @@ def decode_sequence(input_seq):
     stop_condition = False
     decoded_sentence = ""
     while not stop_condition:
-        output_tokens, h, c = decoder_model.predict([target_seq] + states_value)
+        # scores = tf.keras.layers.Attention()._calculate_scores(states_value, encoder_outputs)
+        output_tokens, h, c = decoder_model.predict([target_seq, encoder_outputs, states_value])
 
         # Sample a token
         sampled_token_index = np.argmax(output_tokens[0, -1, :])
@@ -146,7 +154,7 @@ def decode_sequence(input_seq):
 for seq_index in range(20):
     # Take one sequence (part of the training set)
     # for trying out decoding.
-    i = seq_index * 500
+    i = seq_index
     input_seq = encoder_input_data[i : i + 1]
     decoded_sentence = decode_sequence(input_seq)
     print("-")
