@@ -8,7 +8,7 @@ import random as rn
 
 batch_size = 64  # Batch size for training.
 validation_batch_size = 40
-epochs = 1  # Number of epochs to train for.
+epochs = 3  # Number of epochs to train for.
 latent_dim = 256  # Latent dimensionality of the encoding space.
 num_single_cluster_pairs = 10000  # Number of samples to train on.
 # Path to the data txt file on disk.
@@ -126,10 +126,15 @@ def get_data_cluster(i_cluster, n_cluster, pairs):
 
 #%%
 
+
 # Define an input sequence and process it.
 encoder_inputs = tf.keras.Input(shape=(None, num_source_tokens))
-encoder = tf.keras.layers.LSTM(latent_dim, return_sequences=True, return_state=True)
-encoder_stack_h, encoder_last_h, encoder_last_c = encoder(encoder_inputs)
+bidirectional = tf.keras.layers.Bidirectional
+encoder = bidirectional(tf.keras.layers.LSTM(latent_dim, return_sequences=True, return_state=True))
+encoder_stack_h, forward_last_h, forward_last_c, backward_last_h, backward_last_c = encoder(encoder_inputs)
+
+encoder_last_h = tf.keras.layers.Concatenate()([forward_last_h, backward_last_h])
+encoder_last_c = tf.keras.layers.Concatenate()([forward_last_c, backward_last_c])
 
 # We discard `encoder_outputs` and only keep the states.
 encoder_states = [encoder_last_h, encoder_last_c]
@@ -140,7 +145,7 @@ decoder_inputs = tf.keras.Input(shape=(None, num_target_tokens))
 # We set up our decoder to return full output sequences,
 # and to return internal states as well. We don't use the
 # return states in the training model, but we will use them in inference.
-decoder = tf.keras.layers.LSTM(latent_dim, return_sequences=True, return_state=True)
+decoder = tf.keras.layers.LSTM(latent_dim*2, return_sequences=True, return_state=True)
 decoder_stack_h, _, _ = decoder(decoder_inputs, initial_state=encoder_states)
 
 context = tf.keras.layers.Attention()([decoder_stack_h, encoder_stack_h])
@@ -175,13 +180,17 @@ for epoch in range(epochs):
             print(str(epoch+1) + '/' + str(epochs), 'epochs')
         x, Y = get_data_cluster(i_cluster, num_train_cluster, pairs_train)
         x_validation, Y_validation = get_data_cluster(i_cluster, num_valid_cluster, pairs_validation)
-        model.fit(
-            x, Y,
-            validation_data=(x_validation, Y_validation),
-            batch_size=batch_size,
-            epochs=1,
-            shuffle=True,
-        )
+
+        model.train_on_batch(x, Y)
+        model.evaluate(x_validation, Y_validation)
+
+        # model.fit(
+        #     x, Y,
+        #     validation_data=(x_validation, Y_validation),
+        #     batch_size=batch_size,
+        #     epochs=1,
+        #     shuffle=True,
+        # )
 
 # Save model
 model.save("models/" + model_name + ".h5")

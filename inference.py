@@ -7,10 +7,10 @@ import random as rn
 #%%
 
 latent_dim = 256  # Latent dimensionality of the encoding space.
-num_samples = 10000  # Number of samples to train on.
+num_samples = 40000  # Number of samples to train on.
 # Path to the data txt file on disk.
 data_path = "data/pnc-eng.txt"
-model_name = 'seq2seq_with_attention'
+model_name = 'bidirectional_seq2seq_with_attention'
 
 #%%
 
@@ -81,21 +81,25 @@ for i, (input_text, target_text) in enumerate(zip(input_texts, target_texts)):
 # Restore the model and construct the encoder and decoder.
 model = tf.keras.models.load_model("models/" + model_name + ".h5")
 encoder_input = model.inputs[0]
-encoder_output, state_h, state_c = model.layers[2].output
-encoder_model = tf.keras.Model(encoder_input, [encoder_output] + [state_h, state_c])
+encoder_output, forward_last_h, forward_last_c, backward_last_h, backward_last_c = model.layers[1].output
+
+encoder_last_h = tf.keras.layers.Concatenate()([forward_last_h, backward_last_h])
+encoder_last_c = tf.keras.layers.Concatenate()([forward_last_c, backward_last_c])
+
+encoder_model = tf.keras.Model(encoder_input, [encoder_output] + [encoder_last_h, encoder_last_c])
 
 decoder_input = model.inputs[1]
-decoder_state_input_h = tf.keras.Input(shape=(latent_dim,), name="input_3")
-decoder_state_input_c = tf.keras.Input(shape=(latent_dim,), name="input_4")
-encoder_stack_h = tf.keras.Input(shape=(None, latent_dim,), name="input_5")
+decoder_state_input_h = tf.keras.Input(shape=(latent_dim*2,), name="input_3")
+decoder_state_input_c = tf.keras.Input(shape=(latent_dim*2,), name="input_4")
+encoder_stack_h = tf.keras.Input(shape=(None, latent_dim*2,), name="input_5")
 decoder_states_inputs = [decoder_state_input_h, decoder_state_input_c]
-decoder = model.layers[3]
+decoder = model.layers[5]
 decoder_stack_h, decoder_last_h, decoder_last_c = decoder(
     decoder_input, initial_state=decoder_states_inputs
 )
-decoder_attention = model.layers[4]
-decoder_concatenate = model.layers[5]
-decoder_dense = model.layers[6]
+decoder_attention = model.layers[6]
+decoder_concatenate = model.layers[7]
+decoder_dense = model.layers[8]
 
 decoder_last = [decoder_last_h, decoder_last_c]
 context = decoder_attention([decoder_stack_h, encoder_stack_h])
@@ -154,7 +158,7 @@ def decode_sequence(input_seq):
 for seq_index in range(20):
     # Take one sequence (part of the training set)
     # for trying out decoding.
-    i = seq_index
+    i = seq_index * 100
     input_seq = encoder_input_data[i : i + 1]
     decoded_sentence = decode_sequence(input_seq)
     print("-")
