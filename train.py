@@ -130,7 +130,15 @@ def get_data_cluster(i_cluster, n_cluster, pairs):
 # Define an input sequence and process it.
 encoder_inputs = tf.keras.Input(shape=(None, num_source_tokens))
 bidirectional = tf.keras.layers.Bidirectional
-encoder = bidirectional(tf.keras.layers.LSTM(latent_dim, return_sequences=True, return_state=True))
+encoder = bidirectional(
+    tf.keras.layers.LSTM(
+        latent_dim,
+        return_sequences=True,
+        return_state=True,
+        recurrent_dropout=.2,
+        dropout=.2,
+    )
+)
 encoder_stack_h, forward_last_h, forward_last_c, backward_last_h, backward_last_c = encoder(encoder_inputs)
 
 encoder_last_h = tf.keras.layers.Concatenate()([forward_last_h, backward_last_h])
@@ -181,16 +189,13 @@ for epoch in range(epochs):
         x, Y = get_data_cluster(i_cluster, num_train_cluster, pairs_train)
         x_validation, Y_validation = get_data_cluster(i_cluster, num_valid_cluster, pairs_validation)
 
-        model.train_on_batch(x, Y)
-        model.evaluate(x_validation, Y_validation)
-
-        # model.fit(
-        #     x, Y,
-        #     validation_data=(x_validation, Y_validation),
-        #     batch_size=batch_size,
-        #     epochs=1,
-        #     shuffle=True,
-        # )
+        model.fit(
+            x, Y,
+            validation_data=(x_validation, Y_validation),
+            batch_size=batch_size,
+            epochs=1,
+            shuffle=True
+        )
 
 # Save model
 model.save("models/" + model_name + ".h5")

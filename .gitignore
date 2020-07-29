@@ -7,3 +7,5 @@ venv/
 *.tflite
 *.txt
 *.csv
+*.model
+*.vocab

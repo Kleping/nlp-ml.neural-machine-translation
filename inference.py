@@ -21,6 +21,7 @@ input_characters = set()
 target_characters = set()
 with open(data_path, "r", encoding="utf-8") as f:
     lines = f.read().split("\n")
+
 for line in lines[: min(num_samples, len(lines) - 1)]:
     input_text, target_text = line.split("\t")
     # We use "tab" as the "start sequence" character
@@ -158,7 +159,7 @@ def decode_sequence(input_seq):
 for seq_index in range(20):
     # Take one sequence (part of the training set)
     # for trying out decoding.
-    i = seq_index * 100
+    i = seq_index
     input_seq = encoder_input_data[i : i + 1]
     decoded_sentence = decode_sequence(input_seq)
     print("-")
