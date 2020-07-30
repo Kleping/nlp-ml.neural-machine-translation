@@ -18,6 +18,7 @@ validation_split = .2
 num_limit_clusters = 2
 num_train_cluster = int(num_single_cluster_pairs * (1. - validation_split))
 num_valid_cluster = num_single_cluster_pairs - num_train_cluster
+vocab_size = 8000
 
 #%%
 
@@ -99,13 +100,13 @@ def get_data_cluster(i_cluster, n_cluster, pairs):
     target_token_index = dict([(char, i) for i, char in enumerate(target_characters)])
 
     encoder_input_data = np.zeros(
-        (len(source_texts), max_source_seq_len, num_source_tokens), dtype="float32"
+        (len(source_texts), max_source_seq_len, vocab_size), dtype="float32"
     )
     decoder_input_data = np.zeros(
-        (len(target_texts), max_target_seq_len, num_target_tokens), dtype="float32"
+        (len(target_texts), max_target_seq_len, vocab_size), dtype="float32"
     )
     decoder_target_data = np.zeros(
-        (len(target_texts), max_target_seq_len, num_target_tokens), dtype="float32"
+        (len(target_texts), max_target_seq_len, vocab_size), dtype="float32"
     )
 
     for i, (source_text, target_text) in enumerate(zip(source_texts, target_texts)):
