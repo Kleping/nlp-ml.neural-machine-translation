@@ -1,62 +1,67 @@
 import numpy as np
 import tensorflow as tf
-
-from classes.constant import MAX_SEQUENCE, SENTINELS, VOCABULARY_PUNCTUATION
-from classes.auxiliary import tokenize_sequence, encode_seq, seq_to_tokens
+import random as rn
 
 
 class DataSupplier(tf.keras.utils.Sequence):
-    def __init__(self, batch_size, sentences, voc):
+    def __init__(self, batch_size, max_source_seq_len, max_target_seq_len, data, voc_size):
         self.batch_size = batch_size
-        self.sentences = sentences
-
-        self.voc_size = len(voc)
-        self.voc = voc
-        self.d_type = 'int32'
-        self.input_length = MAX_SEQUENCE
-
-        self.on_epoch_end()
+        self.data = data
+        self.voc_size = voc_size
+        self.max_source_seq_len = max_source_seq_len
+        self.max_target_seq_len = max_target_seq_len
+        rn.shuffle(self.data)
 
     def __len__(self):
-        return int(np.floor(len(self.sentences) / self.batch_size))
+        return int(np.floor(len(self.data) / self.batch_size))
 
-    def __getitem__(self, index):
-        indexes = self.indexes[index * self.batch_size:(index + 1) * self.batch_size]
-        return self.__data_generation(indexes)
+    def __getitem__(self, ndx):
+        source, target = self.extract_batch(ndx, self.batch_size, self.data)
+        return self.encode_data(source, target)
 
     def on_epoch_end(self):
-        self.indexes = np.arange(len(self.sentences))
-        np.random.shuffle(self.indexes)
+        rn.shuffle(self.data)
 
-    def get_batched_container(self):
-        return np.zeros((self.batch_size, self.input_length), dtype=self.d_type)
+    # secondary auxiliary methods
+    def encode_data(self, source, target):
+        encoder_input_data = np.zeros(
+            (len(source), self.max_source_seq_len, self.vocab_size), dtype="float32"
+        )
+        decoder_input_data = np.zeros(
+            (len(target), self.max_target_seq_len, self.vocab_size), dtype="float32"
+        )
+        decoder_target_data = np.zeros(
+            (len(target), self.max_target_seq_len, self.vocab_size), dtype="float32"
+        )
 
-    def get_batched_output_container(self):
-        return np.zeros((self.batch_size, self.input_length, self.voc_size), dtype=self.d_type)
+        for i, (source_text, target_text) in enumerate(zip(source, target)):
+            for t, i_vocab in enumerate(source_text.split()):
+                encoder_input_data[i, t, int(i_vocab)] = 1.
 
-    def __data_generation(self, indexes):
-        encoder = self.get_batched_container()
-        decoder = self.get_batched_container()
-        output  = self.get_batched_output_container()
+            for t, i_vocab in enumerate(target_text.split()):
+                decoder_input_data[i, t, int(i_vocab)] = 1.
+                if t > 0:
+                    decoder_target_data[i, t - 1, int(i_vocab)] = 1.
 
-        cluster = [self.sentences[i] for i in indexes]
+        return [encoder_input_data, decoder_input_data], decoder_target_data
 
-        for n in range(len(cluster)):
-            tokens = tokenize_sequence(cluster[n])
-            encoded_seq = encode_seq(tokens, self.voc)
+    def append_sample(self, sample, source, target):
+        source_item, target_item = sample.split('\t')
+        source.append(source_item)
+        target.append(self.encode_target(target_item))
+        return source, target
 
-            encoder [n] = encode_seq([i for i in tokens if i not in VOCABULARY_PUNCTUATION], self.voc)
-            decoder [n] = np.insert(encoded_seq[:-1], 0, self.voc.index(SENTINELS[0]))
-            pre_output  = np.insert(encoded_seq[:-1], len(tokens), self.voc.index(SENTINELS[1]))
+    def extract_batch(self, ndx, batch_size, data):
+        source = []
+        target = []
+        ndx_from = ndx * batch_size
+        ndx_to = min(ndx * batch_size + batch_size, len(data))
 
-            # these arrays are only for test a structure representation of the data
-            # encoded_test = seq_to_tokens(encoder [n], self.voc)
-            # decoded_test = seq_to_tokens(decoder [n], self.voc)
-            # output_test  = seq_to_tokens(pre_output , self.voc)
+        for sample in data[ndx_from: ndx_to]:
+            source, target = self.append_sample(sample, source, target)
 
-            for p, i in enumerate(pre_output):
-                if i == 0:
-                    break
-                output[n][p][i] = 1.
+        if ndx_to % batch_size != 0:
+            for sample in rn.sample(data[:ndx_from], batch_size - len(data) % batch_size):
+                source, target = self.append_sample(sample, source, target)
 
-        return [encoder, decoder], output
+        return source, target

@@ -7,7 +7,9 @@ model_source_file = model_prefix + 'source.model'
 model_target_file = model_prefix + 'target.model'
 npt = 'data/' + language_tag + '/'
 model_type = 'bpe'
-
+batch_size = 64
+num_data = 100*batch_size
+voc_size = 100
 
 if not path.exists('data/' + language_tag + '/paired.txt'):
     print('a file by path [data/' + language_tag + '/paired.txt] does not exist')
@@ -16,7 +18,7 @@ if not path.exists('data/' + language_tag + '/paired.txt'):
 target_texts = ''
 source_texts = ''
 with open('data/' + language_tag + '/paired.txt', "r", encoding='utf-8') as f:
-    for line in f.read().split("\n"):
+    for line in f.read().split("\n")[:num_data]:
         source_text, target_text = line.split("\t")
         source_texts += source_text + '\n'
         target_texts += target_text + '\n'
@@ -30,13 +32,15 @@ with open('data/' + language_tag + '/target.txt', 'w', encoding='utf-8') as f:
 spm.SentencePieceTrainer.Train(
     '--input=' + npt + 'source.txt '
     '--model_prefix=' + model_prefix + 'source '
-    '--model_type=' + model_type
+    '--model_type=' + model_type + ' '
+    '--vocab_size=' + str(voc_size)
 )
 
 spm.SentencePieceTrainer.Train(
     '--input=' + npt + 'target.txt '
     '--model_prefix=' + model_prefix + 'target '
-    '--model_type=' + model_type
+    '--model_type=' + model_type + ' '
+    '--vocab_size=' + str(voc_size)
 )
 
 remove('data/' + language_tag + '/source.txt')
@@ -44,7 +48,7 @@ remove('data/' + language_tag + '/target.txt')
 
 
 def encode(raw_text, spp):
-    return spp.Encode(raw_text, out_type=int, enable_sampling=True, alpha=.1, nbest_size=-1)
+    return spp.Encode(raw_text, out_type=int, enable_sampling=False, alpha=.1, nbest_size=-1)
 
 
 def decode(encoded_text, spp):
@@ -58,7 +62,7 @@ spp_target . Init(model_file=model_target_file)
 encoded_texts = ''
 
 with open('data/' + language_tag + '/paired.txt', "r", encoding='utf-8') as f:
-    lines = f.read().split('\n')
+    lines = f.read().split('\n')[:num_data]
     is_first = False
     for line in lines:
         source_text, target_text = line.split("\t")

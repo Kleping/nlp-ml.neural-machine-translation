@@ -3,83 +3,53 @@
 import numpy as np
 import tensorflow as tf
 import random as rn
+import sentencepiece as spm
 
 #%%
 
-latent_dim = 256  # Latent dimensionality of the encoding space.
-num_samples = 40000  # Number of samples to train on.
-# Path to the data txt file on disk.
-data_path = "data/pnc-eng.txt"
-model_name = 'bidirectional_seq2seq_with_attention'
+language_tag = 'en'
+latent_dim = 128
+data_path = 'data/' + language_tag + '/encoded.txt'
+model_prefix = 'models/' + language_tag + '/'
+model_source_file = model_prefix + 'source.model'
+model_target_file = model_prefix + 'target.model'
+model_name = 'nmt'
+max_source_seq_len = 13
+max_target_seq_len = 16
+n_test_samples = 20
+voc_size_source = 100
+voc_size_target = 102
+i_bos = voc_size_source
+i_eos = voc_size_source + 1
 
 #%%
 
-# Vectorize the data.
-input_texts = []
-target_texts = []
-input_characters = set()
-target_characters = set()
-with open(data_path, "r", encoding="utf-8") as f:
-    lines = f.read().split("\n")
-
-for line in lines[: min(num_samples, len(lines) - 1)]:
-    input_text, target_text = line.split("\t")
-    # We use "tab" as the "start sequence" character
-    # for the targets, and "\n" as "end sequence" character.
-    target_text = "\t" + target_text + "\n"
-    input_texts.append(input_text)
-    target_texts.append(target_text)
-    for char in input_text:
-        if char not in input_characters:
-            input_characters.add(char)
-    for char in target_text:
-        if char not in target_characters:
-            target_characters.add(char)
-
-input_characters = sorted(list(input_characters))
-target_characters = sorted(list(target_characters))
-num_encoder_tokens = len(input_characters)
-num_decoder_tokens = len(target_characters)
-max_encoder_seq_length = max([len(txt) for txt in input_texts])
-max_decoder_seq_length = max([len(txt) for txt in target_texts])
-
-print("Number of samples:", len(input_texts))
-print("Number of unique input tokens:", num_encoder_tokens)
-print("Number of unique output tokens:", num_decoder_tokens)
-print("Max sequence length for inputs:", max_encoder_seq_length)
-print("Max sequence length for outputs:", max_decoder_seq_length)
-
-input_token_index = dict([(char, i) for i, char in enumerate(input_characters)])
-target_token_index = dict([(char, i) for i, char in enumerate(target_characters)])
-
-encoder_input_data = np.zeros(
-    (len(input_texts), max_encoder_seq_length, num_encoder_tokens), dtype="float32"
-)
-decoder_input_data = np.zeros(
-    (len(input_texts), max_decoder_seq_length, num_decoder_tokens), dtype="float32"
-)
-decoder_target_data = np.zeros(
-    (len(input_texts), max_decoder_seq_length, num_decoder_tokens), dtype="float32"
-)
-
-for i, (input_text, target_text) in enumerate(zip(input_texts, target_texts)):
-    for t, char in enumerate(input_text):
-        encoder_input_data[i, t, input_token_index[char]] = 1.0
-    encoder_input_data[i, t + 1 :, input_token_index[" "]] = 1.0
-    for t, char in enumerate(target_text):
-        # decoder_target_data is ahead of decoder_input_data by one timestep
-        decoder_input_data[i, t, target_token_index[char]] = 1.0
-        if t > 0:
-            # decoder_target_data will be ahead by one timestep
-            # and will not include the start character.
-            decoder_target_data[i, t - 1, target_token_index[char]] = 1.0
-    decoder_input_data[i, t + 1 :, target_token_index[" "]] = 1.0
-    decoder_target_data[i, t:, target_token_index[" "]] = 1.0
+voc = dict()
+with open('models/' + language_tag + '/target.vocab', "r", encoding="utf-8") as f:
+    pairs = f.read().split("\n")
+    for pair in pairs:
+        if pair == '':
+            continue
+        v, k = pair.split('\t')
+        if k == '0':
+            continue
+        voc[int(k[1:])] = v
 
 #%%
 
-# Define sampling models
-# Restore the model and construct the encoder and decoder.
+data = list()
+with open('data/' + language_tag + '/encoded.txt', "r", encoding='utf-8') as f:
+    for sample in f.read().split("\n"):
+        source, target = sample.split("\t")
+        source_tokens = source.split()
+        target_tokens = target.split()
+        if (len(source_tokens) > max_source_seq_len) or (len(target_tokens) > max_target_seq_len):
+            continue
+
+        data.append(source)
+
+#%%
+
 model = tf.keras.models.load_model("models/" + model_name + ".h5")
 encoder_input = model.inputs[0]
 encoder_output, forward_last_h, forward_last_c, backward_last_h, backward_last_c = model.layers[1].output
@@ -110,58 +80,59 @@ decoder_model = tf.keras.Model(
     [decoder_input, encoder_stack_h, decoder_states_inputs],
     [decoder_stack_h] + decoder_last
 )
-print(decoder_model.summary())
 
 #%%
 
-# Reverse-lookup token index to decode sequences back to
-# something readable.
-reverse_input_char_index = dict((i, char) for char, i in input_token_index.items())
-reverse_target_char_index = dict((i, char) for char, i in target_token_index.items())
+
+def encode(sample):
+    encoded_sample = np.zeros(shape=(1, max_source_seq_len, voc_size_source), dtype='float32')
+    for t, i_vocab in enumerate(sample.split()):
+        encoded_sample[0, t, int(i_vocab)] = 1.
+    return encoded_sample
 
 
-def decode_sequence(input_seq):
-    # Encode the input as state vectors.
-    encoder_outputs, h, c = encoder_model.predict(input_seq)
+def predict(input_sample):
+    encoder_outputs, h, c = encoder_model.predict(input_sample)
     states_value = [h, c]
-    # Generate empty target sequence of length 1.
-    target_seq = np.zeros((1, 1, num_decoder_tokens))
-    # Populate the first character of target sequence with the start character.
-    target_seq[0, 0, target_token_index["\t"]] = 1.0
+    target_seq = np.zeros((1, 1, voc_size_target))
+    target_seq[0, 0, i_bos] = 1.0
 
-    # Sampling loop for a batch of sequences
-    # (to simplify, here we assume a batch of size 1).
     stop_condition = False
-    decoded_sentence = ""
+    predicted_tokens = list()
+
     while not stop_condition:
-        # scores = tf.keras.layers.Attention()._calculate_scores(states_value, encoder_outputs)
         output_tokens, h, c = decoder_model.predict([target_seq, encoder_outputs, states_value])
 
-        # Sample a token
-        sampled_token_index = np.argmax(output_tokens[0, -1, :])
-        sampled_char = reverse_target_char_index[sampled_token_index]
-        decoded_sentence += sampled_char
+        sampled_token = np.argmax(output_tokens[0, -1, :])
+        predicted_tokens.append(sampled_token)
 
-        # Exit condition: either hit max length
-        # or find stop character.
-        if sampled_char == "\n" or len(decoded_sentence) > max_decoder_seq_length:
+        if sampled_token == i_eos or len(predicted_tokens) > max_target_seq_len:
             stop_condition = True
 
-        # Update the target sequence (of length 1).
-        target_seq = np.zeros((1, 1, num_decoder_tokens))
-        target_seq[0, 0, sampled_token_index] = 1.0
+        target_seq = np.zeros((1, 1, voc_size_target))
+        target_seq[0, 0, sampled_token] = 1.0
 
-        # Update states
         states_value = [h, c]
-    return decoded_sentence
+    return predicted_tokens[:-1]
 
 
-for seq_index in range(20):
-    # Take one sequence (part of the training set)
-    # for trying out decoding.
-    i = seq_index
-    input_seq = encoder_input_data[i : i + 1]
-    decoded_sentence = decode_sequence(input_seq)
-    print("-")
-    print("Input sentence:", input_texts[i])
-    print("Decoded sentence:", decoded_sentence)
+def decode(encoded_text, spp):
+    return spp.Decode(encoded_text)
+
+
+def encode_raw(raw_text, spp):
+    return spp.Encode(raw_text, out_type=int, enable_sampling=False, alpha=.1, nbest_size=-1)
+
+
+spp_source = spm.SentencePieceProcessor()
+spp_target = spm.SentencePieceProcessor()
+spp_source . Init(model_file=model_source_file)
+spp_target . Init(model_file=model_target_file)
+
+
+for i in rn.choices(range(len(data)), k=n_test_samples):
+    sample = data[i]
+    predicted_tokens = predict(encode(sample))
+    print('\n')
+    print('input:', decode([int(i) for i in sample.split()], spp_source))
+    print('predicted:', decode([int(i) for i in predicted_tokens], spp_target))
