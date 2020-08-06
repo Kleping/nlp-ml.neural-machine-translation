@@ -198,13 +198,14 @@ valid_supplier = DataSupplier(
     voc_size_target
 )
 
-es = tf.keras.callbacks.EarlyStopping(monitor='loss', patience=5)
+es = tf.keras.callbacks.EarlyStopping(monitor='val_loss', min_delta=0, patience=0, verbose=0, mode='auto')
+
 model.fit(
     train_supplier,
     validation_data=valid_supplier,
     epochs=epochs,
     shuffle=True,
-    callbacks=[es]
+    callbacks=[es],
 )
 
 # model.save("models/" + model_name + ".h5")

@@ -34,14 +34,15 @@ if not path.exists(paired_path):
         return source_text.split()
 
     def split_target(target_text):
+        delimiters = ['"']
         target_tokens = list()
         [
             [
                 target_tokens.append(w) for w in i.split() if w is not ''
             ]
-            for i in re.split('(' + '|'.join(map(re.escape, punctuation)) + ')', target_text)
+            for i in re.split('(' + '|'.join(map(re.escape, punctuation + delimiters)) + ')', target_text)
         ]
-        return target_tokens
+        return [token for token in target_tokens if token not in delimiters]
 
     with open(original_path, "r", encoding='utf-8') as f:
         lines = f.read().split('\n')
@@ -61,6 +62,8 @@ if not path.exists(paired_path):
                 if target_tokens[(n_word + target_shifted_num + 1)] in punctuation:
                     target_shifted_num += 1
                 target_range = target_tokens[:(n_word + 1 + target_shifted_num)]
+                if target_range[-1] is ',':
+                    target_range = target_range[:-1]
                 for i, tw in enumerate(target_range):
                     target_text += ('' if (i == 0) or (tw in punctuation) or (len(target_range) == i) else ' ') + tw
 
