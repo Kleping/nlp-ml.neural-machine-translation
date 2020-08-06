@@ -7,17 +7,19 @@ import random as rn
 #%%
 
 batch_size = 64
-epochs = 50
+epochs = 500
 latent_dim = 128
-num_data = 100*batch_size
+# num_data = 100*batch_size
 language_tag = 'en'
 data_path = 'data/' + language_tag + '/encoded.txt'
 model_name = 'nmt'
 validation_split = .2
 voc_size_source = 100
-voc_size_target = 102
+voc_size_target = 100 + 2
 i_bos = voc_size_source
 i_eos = voc_size_source + 1
+voc_size_source += 1
+voc_size_target += 1
 
 #%%
 
@@ -51,7 +53,8 @@ def split_data(data):
 
 with open(data_path, "r", encoding="utf-8") as f:
     data = f.read().split("\n")
-    data = data[:min(len(data), num_data)]
+    # data = data[:min(len(data), num_data)]
+    print(len(data))
 
 
 max_source_seq_len, max_target_seq_len = find_max_seq_data_len(data)
@@ -95,12 +98,24 @@ class DataSupplier(tf.keras.utils.Sequence):
 
         for i, (source_text, target_text) in enumerate(zip(source, target)):
             for t, i_vocab in enumerate(source_text.split()):
-                encoder_input_data[i, t, int(i_vocab)] = 1.
+                encoder_input_data[i, t, int(i_vocab)+1] = 1.
+
+            # It's maybe a temporary solution
+            for t in range(len(source_text.split()), self.max_source_seq_len):
+                encoder_input_data[i, t, 0] = 1.
 
             for t, i_vocab in enumerate(target_text.split()):
-                decoder_input_data[i, t, int(i_vocab)] = 1.
+                decoder_input_data[i, t, int(i_vocab)+1] = 1.
                 if t > 0:
-                    decoder_target_data[i, t - 1, int(i_vocab)] = 1.
+                    decoder_target_data[i, t - 1, int(i_vocab)+1] = 1.
+
+            # It's maybe a temporary solution
+            for t in range(len(target_text.split()), self.max_target_seq_len):
+                decoder_input_data[i, t, 0] = 1.
+
+            # It's maybe a temporary solution
+            for t in range(len(target_text.split())-1, self.max_target_seq_len):
+                decoder_target_data[i, t, 0] = 1.
 
         return [encoder_input_data, decoder_input_data], decoder_target_data
 
@@ -160,12 +175,10 @@ decoder_stack_h = tf.keras.layers.TimeDistributed(dense)(d0)
 model = tf.keras.Model([encoder_inputs, decoder_inputs], decoder_stack_h)
 
 #%%
-optimizer = tf.keras.optimizers.Adam(learning_rate=0.0001, amsgrad=True)
+optimizer = tf.keras.optimizers.Adam(learning_rate=0.003, amsgrad=True)
 model.compile(
     optimizer=optimizer, loss="categorical_crossentropy", metrics=["accuracy"]
 )
-
-print(max_source_seq_len, max_target_seq_len)
 
 train_supplier = DataSupplier(
     batch_size,
@@ -185,12 +198,13 @@ valid_supplier = DataSupplier(
     voc_size_target
 )
 
+es = tf.keras.callbacks.EarlyStopping(monitor='loss', patience=5)
 model.fit(
     train_supplier,
     validation_data=valid_supplier,
     epochs=epochs,
     shuffle=True,
+    callbacks=[es]
 )
 
-# Save model
-model.save("models/" + model_name + ".h5")
+# model.save("models/" + model_name + ".h5")

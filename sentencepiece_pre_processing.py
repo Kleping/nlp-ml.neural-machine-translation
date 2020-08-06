@@ -1,50 +1,111 @@
 import sentencepiece as spm
 from os import path, remove
+import re
 
 language_tag = 'en'
+punctuation = ['!', '?', '.', ',']
 model_prefix = 'models/' + language_tag + '/'
 model_source_file = model_prefix + 'source.model'
 model_target_file = model_prefix + 'target.model'
+
+data_path = 'data/' + language_tag + '/'
+
+source_path   = data_path + 'source'   + '.txt'
+target_path   = data_path + 'target'   + '.txt'
+original_path = data_path + 'original' + '.txt'
+paired_path   = data_path + 'paired'   + '.txt'
+encoded_path  = data_path + 'encoded'  + '.txt'
+
 npt = 'data/' + language_tag + '/'
 model_type = 'bpe'
 batch_size = 64
 num_data = 100*batch_size
 voc_size = 100
 
-if not path.exists('data/' + language_tag + '/paired.txt'):
-    print('a file by path [data/' + language_tag + '/paired.txt] does not exist')
+if not path.exists(original_path):
+    print('a file by path [' + original_path + '] does not exist')
     quit()
 
-target_texts = ''
-source_texts = ''
-with open('data/' + language_tag + '/paired.txt', "r", encoding='utf-8') as f:
-    for line in f.read().split("\n")[:num_data]:
-        source_text, target_text = line.split("\t")
-        source_texts += source_text + '\n'
-        target_texts += target_text + '\n'
+if not path.exists(paired_path):
+    paired_data = list()
+    unique_keys = dict()
 
-with open('data/' + language_tag + '/source.txt', 'w', encoding='utf-8') as f:
-    f.write(source_texts)
+    def split_source(source_text):
+        return source_text.split()
 
-with open('data/' + language_tag + '/target.txt', 'w', encoding='utf-8') as f:
-    f.write(target_texts)
+    def split_target(target_text):
+        target_tokens = list()
+        [
+            [
+                target_tokens.append(w) for w in i.split() if w is not ''
+            ]
+            for i in re.split('(' + '|'.join(map(re.escape, punctuation)) + ')', target_text)
+        ]
+        return target_tokens
+
+    with open(original_path, "r", encoding='utf-8') as f:
+        lines = f.read().split('\n')
+        lines_counter = 0
+        last_percent = 0
+        ln = len(lines)
+        for line in lines:
+            target_shifted_num = 0
+
+            source_text, target_text = line.split('\t')
+            source_tokens = split_source(source_text)
+            target_tokens = split_target(target_text)
+
+            for n_word in range(len(source_tokens)):
+                source_text = ' '.join(source_tokens[:(n_word + 1)])
+                target_text = ''
+                if target_tokens[(n_word + target_shifted_num + 1)] in punctuation:
+                    target_shifted_num += 1
+                target_range = target_tokens[:(n_word + 1 + target_shifted_num)]
+                for i, tw in enumerate(target_range):
+                    target_text += ('' if (i == 0) or (tw in punctuation) or (len(target_range) == i) else ' ') + tw
+
+                pair = source_text + '\t' + target_text
+                if pair not in unique_keys:
+                    unique_keys[pair] = ''
+                    paired_data.append(pair)
+
+            lines_counter += 1
+            percent = int(lines_counter / ln * 100)
+            if percent != last_percent:
+                print(percent, '/', '100')
+                last_percent = percent
+
+    with open(paired_path, 'w', encoding='utf-8') as f:
+        f.write('\n'.join(paired_data))
+
+if (not path.exists(source_path)) or (not path.exists(target_path)):
+    source_texts = list()
+    target_texts = list()
+    with open(paired_path, "r", encoding='utf-8') as f:
+        for line in f.read().split("\n"):
+            source_text, target_text = line.split('\t')
+            source_texts.append(source_text)
+            target_texts.append(target_text)
+
+    with open(source_path, 'w', encoding='utf-8') as f:
+        f.write('\n'.join(source_texts))
+
+    with open(target_path, 'w', encoding='utf-8') as f:
+        f.write('\n'.join(target_texts))
 
 spm.SentencePieceTrainer.Train(
-    '--input=' + npt + 'source.txt '
+    '--input=' + source_path + ' '
     '--model_prefix=' + model_prefix + 'source '
     '--model_type=' + model_type + ' '
     '--vocab_size=' + str(voc_size)
 )
 
 spm.SentencePieceTrainer.Train(
-    '--input=' + npt + 'target.txt '
+    '--input=' + target_path + ' '
     '--model_prefix=' + model_prefix + 'target '
     '--model_type=' + model_type + ' '
     '--vocab_size=' + str(voc_size)
 )
-
-remove('data/' + language_tag + '/source.txt')
-remove('data/' + language_tag + '/target.txt')
 
 
 def encode(raw_text, spp):
@@ -61,8 +122,8 @@ spp_source . Init(model_file=model_source_file)
 spp_target . Init(model_file=model_target_file)
 encoded_texts = ''
 
-with open('data/' + language_tag + '/paired.txt', "r", encoding='utf-8') as f:
-    lines = f.read().split('\n')[:num_data]
+with open(paired_path, "r", encoding='utf-8') as f:
+    lines = f.read().split('\n')
     is_first = False
     for line in lines:
         source_text, target_text = line.split("\t")
@@ -71,5 +132,5 @@ with open('data/' + language_tag + '/paired.txt', "r", encoding='utf-8') as f:
         encoded_texts += str(('\n' if is_first else '') + encoded_source + '\t' + encoded_target)
         is_first = True
 
-with open('data/' + language_tag + '/encoded.txt', 'w', encoding='utf-8') as f:
+with open(encoded_path, 'w', encoding='utf-8') as f:
     f.write(encoded_texts)
