@@ -1,48 +1,65 @@
-#%%
-
 import numpy as np
 import tensorflow as tf
 import random as rn
+import re
+import json
 
-#%%
+epochs = 100
+batch_size = 128
+coefficient = 400
 
-batch_size = 64
-epochs = 500
-latent_dim = 128
-# num_data = 100*batch_size
+num_data = coefficient*batch_size
+latent_dim = 32
 language_tag = 'en'
-data_path = 'data/' + language_tag + '/encoded.txt'
-model_name = 'nmt'
+data_path = 'data/{}/paired.txt'.format(language_tag)
+model_name = 'nmt_{}_{}_{}'.format(epochs, batch_size, coefficient)
 validation_split = .2
-voc_size_source = 100
-voc_size_target = 100 + 2
-i_bos = voc_size_source
-i_eos = voc_size_source + 1
-voc_size_source += 1
-voc_size_target += 1
+punctuation = ['!', '?', '.', ',']
+sentinels = ['<BOS>', '<EOS>']
+OOV_TOKEN = '<OOV>'
+PAD_TOKEN = '<PAD>'
 
-#%%
+
+def split_with_keep_delimiters(text, delimiters):
+    return [
+        token for token in re.split('(' + '|'.join(map(re.escape, delimiters)) + ')', text) if token is not ''
+    ]
+
+
+def tokenize_text(text):
+    tokens = list()
+    for token in text.split():
+        if any(map(str.isdigit, token)):
+            if token[-1] in punctuation:
+                tokens.append(token[:-1])
+                tokens.append(token[-1])
+            else:
+                tokens.append(token)
+        else:
+            [tokens.append(splitted_token) for splitted_token in split_with_keep_delimiters(token, punctuation)]
+
+    return tokens
 
 
 def encode_target(text):
-    return str(i_bos) + ' ' + text + ' ' + str(i_eos)
+    return '{} {} {}'.format(sentinels[0], text, sentinels[1])
 
 
-def find_max_seq_data_len(data):
-    max_source_seq_len = 0
-    max_target_seq_len = 0
+def get_max_sample_length(data):
+    max_source = 0
+    max_target = 0
     for sample in data:
-        source, target = sample.split("\t")
+        source, target = sample.split('\t')
 
-        source_len = len(source.split())
-        if source_len > max_source_seq_len:
-            max_source_seq_len = source_len
+        source_len = len(tokenize_text(source))
+        if source_len > max_source:
+            max_source = source_len
 
-        target_len = len(encode_target(target).split())
-        if target_len > max_target_seq_len:
-            max_target_seq_len = target_len
+        target_len = len(tokenize_text(encode_target(target)))
+        if target_len > max_target:
+            max_target = target_len
 
-    return max_source_seq_len, max_target_seq_len
+    return max_source, max_target
 
 
 def split_data(data):
@@ -51,25 +68,48 @@ def split_data(data):
     return data_train, data_validation
 
 
-with open(data_path, "r", encoding="utf-8") as f:
-    data = f.read().split("\n")
-    # data = data[:min(len(data), num_data)]
-    print(len(data))
+def get_voc_from_data(data):
+    source_voc = list()
+    for sample in data:
+        source, _ = sample.split('\t')
+        tokenized_source = tokenize_text(source)
+        [source_voc.append(token) for token in tokenized_source if token not in source_voc]
+    source_voc = sorted(source_voc)
+
+    return ([PAD_TOKEN] + source_voc + [OOV_TOKEN]), ([PAD_TOKEN] + source_voc + sentinels + punctuation + [OOV_TOKEN])
 
 
-max_source_seq_len, max_target_seq_len = find_max_seq_data_len(data)
+def serialize_and_write_config(source, target, max_source_len, max_target_len):
+    config = {'source': source, 'target': target, 'max_source_len': max_source_len, 'max_target_len': max_target_len}
+    with open('models/{}/{}.config'.format(language_tag, model_name), 'w') as config_file:
+        json.dump(config, config_file, indent=4)
+
+
+with open(data_path, 'r', encoding='utf-8') as f:
+    data = f.read().split('\n')[:num_data]
+
 rn.shuffle(data)
 data_train, data_valid = split_data(data)
+max_source_len, max_target_len = get_max_sample_length(data_train + data_valid)
+source_voc, target_voc = get_voc_from_data(data_train)
 
-#%%
+print()
+print('len(data):', len(data))
+print('max_source_len:', max_source_len)
+print('max_target_len:', max_target_len)
+# print('source_voc:', source_voc)
+# print('target_voc:', target_voc)
+print('len(source_voc):', len(source_voc))
+print('len(target_voc):', len(target_voc))
+print()
 
 
 class DataSupplier(tf.keras.utils.Sequence):
-    def __init__(self, batch_size, max_source_seq_len, max_target_seq_len, data, voc_size_source, voc_size_target):
+    def __init__(self, batch_size, max_source_seq_len, max_target_seq_len, data, source_voc, target_voc):
         self.batch_size = batch_size
         self.data = data
-        self.voc_size_source = voc_size_source
-        self.voc_size_target = voc_size_target
+        self.source_voc = source_voc
+        self.target_voc = target_voc
         self.max_source_seq_len = max_source_seq_len
         self.max_target_seq_len = max_target_seq_len
         rn.shuffle(self.data)
@@ -85,37 +125,38 @@ class DataSupplier(tf.keras.utils.Sequence):
         rn.shuffle(self.data)
 
     # secondary auxiliary methods
+    @staticmethod
+    def get_token_index(voc, token):
+        if token in voc:
+            voc_i = voc.index(token)
+        else:
+            voc_i = voc.index(OOV_TOKEN)
+        return voc_i
+
     def encode_data(self, source, target):
         encoder_input_data = np.zeros(
-            (len(source), self.max_source_seq_len, self.voc_size_source), dtype="float32"
+            (len(source), self.max_source_seq_len), dtype='int32'
         )
         decoder_input_data = np.zeros(
-            (len(target), self.max_target_seq_len, self.voc_size_target), dtype="float32"
+            (len(target), self.max_target_seq_len), dtype='int32'
         )
         decoder_target_data = np.zeros(
-            (len(target), self.max_target_seq_len, self.voc_size_target), dtype="float32"
+            (len(target), self.max_target_seq_len), dtype='int32'
         )
 
         for i, (source_text, target_text) in enumerate(zip(source, target)):
-            for t, i_vocab in enumerate(source_text.split()):
-                encoder_input_data[i, t, int(i_vocab)+1] = 1.
+            for t, token in enumerate(tokenize_text(source_text)):
+                encoder_input_data[i, t] = self.get_token_index(self.source_voc, token)
 
-            # It's maybe a temporary solution
-            for t in range(len(source_text.split()), self.max_source_seq_len):
-                encoder_input_data[i, t, 0] = 1.
-
-            for t, i_vocab in enumerate(target_text.split()):
-                decoder_input_data[i, t, int(i_vocab)+1] = 1.
+            for t, token in enumerate(tokenize_text(target_text)):
+                token_ndx = self.get_token_index(self.target_voc, token)
+                decoder_input_data[i, t] = token_ndx
                 if t > 0:
-                    decoder_target_data[i, t - 1, int(i_vocab)+1] = 1.
+                    decoder_target_data[i, t - 1] = token_ndx
 
-            # It's maybe a temporary solution
-            for t in range(len(target_text.split()), self.max_target_seq_len):
-                decoder_input_data[i, t, 0] = 1.
-
-            # It's maybe a temporary solution
-            for t in range(len(target_text.split())-1, self.max_target_seq_len):
-                decoder_target_data[i, t, 0] = 1.
+            # It's only a debug representation
+            # print('\n{}'.format(' '.join([source_voc[token] for token in encoder_input_data[i]])))
+            # print('{}'.format(' '.join([target_voc[token] for token in decoder_input_data[i]])))
 
         return [encoder_input_data, decoder_input_data], decoder_target_data
 
@@ -142,70 +183,66 @@ class DataSupplier(tf.keras.utils.Sequence):
         return source, target
 
 
-#%%
-
-encoder_inputs = tf.keras.Input(shape=(None, voc_size_source))
-bidirectional = tf.keras.layers.Bidirectional
-encoder = bidirectional(
+encoder_inputs = tf.keras.Input(shape=(max_source_len,))
+encoder_emb = tf.keras.layers.Embedding(len(source_voc), latent_dim)(encoder_inputs)
+encoder = tf.keras.layers.Bidirectional(
     tf.keras.layers.LSTM(
         latent_dim,
         return_sequences=True,
         return_state=True
     )
 )
-encoder_stack_h, forward_last_h, forward_last_c, backward_last_h, backward_last_c = encoder(encoder_inputs)
+encoder_stack_h, forward_last_h, forward_last_c, backward_last_h, backward_last_c = encoder(encoder_emb)
 
 encoder_last_h = tf.keras.layers.Concatenate()([forward_last_h, backward_last_h])
 encoder_last_c = tf.keras.layers.Concatenate()([forward_last_c, backward_last_c])
 
 encoder_states = [encoder_last_h, encoder_last_c]
 
-decoder_inputs = tf.keras.Input(shape=(None, voc_size_target))
-
+decoder_inputs = tf.keras.Input(shape=(max_target_len,))
+decoder_emb = tf.keras.layers.Embedding(len(target_voc), latent_dim)(decoder_inputs)
 decoder = tf.keras.layers.LSTM(latent_dim*2, return_sequences=True, return_state=True)
-decoder_stack_h, _, _ = decoder(decoder_inputs, initial_state=encoder_states)
+decoder_stack_h, _, _ = decoder(decoder_emb, initial_state=encoder_states)
 
 context = tf.keras.layers.Attention()([decoder_stack_h, encoder_stack_h])
 decoder_concat_input = tf.keras.layers.concatenate([context, decoder_stack_h])
 
-d0 = tf.keras.layers.TimeDistributed(tf.keras.layers.Dense(latent_dim, activation="relu"))(decoder_concat_input)
-dense = tf.keras.layers.Dense(voc_size_target, activation='softmax')
-decoder_stack_h = tf.keras.layers.TimeDistributed(dense)(d0)
+dense = tf.keras.layers.Dense(len(target_voc), activation='softmax')
+decoder_stack_h = tf.keras.layers.TimeDistributed(dense)(decoder_concat_input)
 
 model = tf.keras.Model([encoder_inputs, decoder_inputs], decoder_stack_h)
 
-#%%
-optimizer = tf.keras.optimizers.Adam(learning_rate=0.003, amsgrad=True)
 model.compile(
-    optimizer=optimizer, loss="categorical_crossentropy", metrics=["accuracy"]
+    optimizer='rmsprop', loss='sparse_categorical_crossentropy', metrics=['accuracy']
 )
 
 train_supplier = DataSupplier(
     batch_size,
-    max_source_seq_len,
-    max_target_seq_len,
+    max_source_len,
+    max_target_len,
     data_train,
-    voc_size_source,
-    voc_size_target
+    source_voc,
+    target_voc
 )
 
 valid_supplier = DataSupplier(
     batch_size,
-    max_source_seq_len,
-    max_target_seq_len,
+    max_source_len,
+    max_target_len,
     data_valid,
-    voc_size_source,
-    voc_size_target
+    source_voc,
+    target_voc
 )
 
-es = tf.keras.callbacks.EarlyStopping(monitor='val_loss', min_delta=0, patience=0, verbose=0, mode='auto')
+# es = tf.keras.callbacks.EarlyStopping(monitor='val_loss', min_delta=0, patience=3, verbose=0, mode='auto')
 
 model.fit(
     train_supplier,
     validation_data=valid_supplier,
     epochs=epochs,
     shuffle=True,
-    callbacks=[es],
+    # callbacks=[es]
 )
 
-# model.save("models/" + model_name + ".h5")
+model.save('models/{}/{}.h5'.format(language_tag, model_name))
+serialize_and_write_config(source_voc, target_voc, max_source_len, max_target_len)
