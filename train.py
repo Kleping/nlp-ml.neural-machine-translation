@@ -4,16 +4,20 @@ import random as rn
 import re
 import json
 
+validation_split = .3
+
 epochs = 100
 batch_size = 128
-coefficient = 400
-
-num_data = coefficient*batch_size
+coefficient = 500
 latent_dim = 32
+
+model_name = 'nmt_{}_{}_{}_{}'.format(epochs, batch_size, coefficient, latent_dim)
+num_data = coefficient*batch_size
+
 language_tag = 'en'
 data_path = 'data/{}/paired.txt'.format(language_tag)
-model_name = 'nmt_{}_{}_{}'.format(epochs, batch_size, coefficient)
-validation_split = .2
+model_path = 'models/{}/{}.h5'.format(language_tag, model_name)
+
 punctuation = ['!', '?', '.', ',']
 sentinels = ['<BOS>', '<EOS>']
 OOV_TOKEN = '<OOV>'
@@ -65,24 +69,41 @@ def get_max_sample_length(data):
 def split_data(data):
     data_validation = data[-int(validation_split * len(data)):]
     data_train = data[:int(len(data) - len(data_validation))]
-    return data_train, data_validation
+    return data_train, data_validation[:len(data_validation)//2]
 
 
 def get_voc_from_data(data):
-    source_voc = list()
+    bag_of_words = list()
     for sample in data:
         source, _ = sample.split('\t')
         tokenized_source = tokenize_text(source)
-        [source_voc.append(token) for token in tokenized_source if token not in source_voc]
-    source_voc = sorted(source_voc)
+        [bag_of_words.append(token) for token in tokenized_source if token not in bag_of_words]
+    source_v = (bag_of_words + [OOV_TOKEN])
+    target_v = (bag_of_words + sentinels + punctuation + [OOV_TOKEN])
+    rn.shuffle(source_v)
+    rn.shuffle(target_v)
+    return ([PAD_TOKEN] + source_v), ([PAD_TOKEN] + target_v)
 
-    return ([PAD_TOKEN] + source_voc + [OOV_TOKEN]), ([PAD_TOKEN] + source_voc + sentinels + punctuation + [OOV_TOKEN])
 
-
-def serialize_and_write_config(source, target, max_source_len, max_target_len):
-    config = {'source': source, 'target': target, 'max_source_len': max_source_len, 'max_target_len': max_target_len}
+def serialize_and_write_config(source, target, max_source_len, max_target_len, history):
+    config = {
+        'source': source,
+        'target': target,
+        'max_source_len': max_source_len,
+        'max_target_len': max_target_len,
+        'history': history
+    }
     with open('models/{}/{}.config'.format(language_tag, model_name), 'w') as config_file:
         json.dump(config, config_file, indent=4)
+
+
+def compile_model(m):
+    optimizer = tf.keras.optimizers.Adam()
+
+    m.compile(
+        optimizer=optimizer, loss='sparse_categorical_crossentropy', metrics=['accuracy']
+    )
+    return m
 
 
 with open(data_path, 'r', encoding='utf-8') as f:
@@ -112,7 +133,8 @@ class DataSupplier(tf.keras.utils.Sequence):
         self.target_voc = target_voc
         self.max_source_seq_len = max_source_seq_len
         self.max_target_seq_len = max_target_seq_len
-        rn.shuffle(self.data)
+        if self.data is not None:
+            rn.shuffle(self.data)
 
     def __len__(self):
         return int(np.floor(len(self.data) / self.batch_size))
@@ -156,7 +178,7 @@ class DataSupplier(tf.keras.utils.Sequence):
 
             # It's only a debug representation
             # print('\n{}'.format(' '.join([source_voc[token] for token in encoder_input_data[i]])))
-            # print('{}'.format(' '.join([target_voc[token] for token in decoder_input_data[i]])))
+            # print('{}'.format(' '.join([target_voc[token] for token in decoder_target_data[i]])))
 
         return [encoder_input_data, decoder_input_data], decoder_target_data
 
@@ -183,38 +205,48 @@ class DataSupplier(tf.keras.utils.Sequence):
         return source, target
 
 
-encoder_inputs = tf.keras.Input(shape=(max_source_len,))
+encoder_inputs = tf.keras.Input(shape=(None,))
 encoder_emb = tf.keras.layers.Embedding(len(source_voc), latent_dim)(encoder_inputs)
+
 encoder = tf.keras.layers.Bidirectional(
     tf.keras.layers.LSTM(
         latent_dim,
         return_sequences=True,
-        return_state=True
+        recurrent_dropout=.1
     )
 )
-encoder_stack_h, forward_last_h, forward_last_c, backward_last_h, backward_last_c = encoder(encoder_emb)
+
+encoder_secondary = tf.keras.layers.Bidirectional(
+    tf.keras.layers.LSTM(
+        latent_dim*2,
+        return_sequences=True,
+        return_state=True,
+        recurrent_dropout=.1
+    )
+)
+
+encoder_stack_h = encoder(encoder_emb)
+encoder_secondary_stack_h, forward_last_h, forward_last_c, backward_last_h, backward_last_c \
+    = encoder_secondary(encoder_stack_h)
 
 encoder_last_h = tf.keras.layers.Concatenate()([forward_last_h, backward_last_h])
 encoder_last_c = tf.keras.layers.Concatenate()([forward_last_c, backward_last_c])
 
 encoder_states = [encoder_last_h, encoder_last_c]
 
-decoder_inputs = tf.keras.Input(shape=(max_target_len,))
+decoder_inputs = tf.keras.Input(shape=(None,))
 decoder_emb = tf.keras.layers.Embedding(len(target_voc), latent_dim)(decoder_inputs)
-decoder = tf.keras.layers.LSTM(latent_dim*2, return_sequences=True, return_state=True)
+decoder = tf.keras.layers.LSTM(latent_dim*4, return_sequences=True, return_state=True)
 decoder_stack_h, _, _ = decoder(decoder_emb, initial_state=encoder_states)
 
-context = tf.keras.layers.Attention()([decoder_stack_h, encoder_stack_h])
+context = tf.keras.layers.Attention()([decoder_stack_h, encoder_secondary_stack_h])
 decoder_concat_input = tf.keras.layers.concatenate([context, decoder_stack_h])
 
 dense = tf.keras.layers.Dense(len(target_voc), activation='softmax')
 decoder_stack_h = tf.keras.layers.TimeDistributed(dense)(decoder_concat_input)
 
 model = tf.keras.Model([encoder_inputs, decoder_inputs], decoder_stack_h)
-
-model.compile(
-    optimizer='rmsprop', loss='sparse_categorical_crossentropy', metrics=['accuracy']
-)
+model = compile_model(model)
 
 train_supplier = DataSupplier(
     batch_size,
@@ -234,15 +266,15 @@ valid_supplier = DataSupplier(
     target_voc
 )
 
-# es = tf.keras.callbacks.EarlyStopping(monitor='val_loss', min_delta=0, patience=3, verbose=0, mode='auto')
+es = tf.keras.callbacks.EarlyStopping(monitor='val_loss', min_delta=0, patience=5, verbose=0, mode='auto')
 
-model.fit(
+history = model.fit(
     train_supplier,
     validation_data=valid_supplier,
     epochs=epochs,
     shuffle=True,
-    # callbacks=[es]
-)
+    callbacks=[es]
+).history
 
-model.save('models/{}/{}.h5'.format(language_tag, model_name))
-serialize_and_write_config(source_voc, target_voc, max_source_len, max_target_len)
+model.save(model_path)
+serialize_and_write_config(source_voc, target_voc, max_source_len, max_target_len, history)

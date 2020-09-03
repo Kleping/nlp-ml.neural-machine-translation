@@ -5,14 +5,16 @@ import json
 
 epochs = 100
 batch_size = 128
-coefficient = 100
+coefficient = 500
+latent_dim = 32
 
+model_name = 'nmt_{}_{}_{}_{}'.format(epochs, batch_size, coefficient, latent_dim)
 num_data = coefficient*batch_size
-latent_dim = 128
+
 language_tag = 'en'
 data_path = 'data/{}/paired.txt'.format(language_tag)
-model_name = 'nmt_{}_{}_{}'.format(epochs, batch_size, coefficient)
-validation_split = .2
+
+
 punctuation = ['!', '?', '.', ',']
 sentinels = ['<BOS>', '<EOS>']
 OOV_TOKEN = '<OOV>'
@@ -52,7 +54,7 @@ def deserialize_and_read_config():
 
 
 with open(data_path, 'r', encoding='utf-8') as f:
-    data = f.read().split('\n')[:num_data]
+    data = f.read().split('\n')[num_data+300:num_data+320]
 
 source_voc, target_voc, max_source_seq_len, max_target_seq_len = deserialize_and_read_config()
 
@@ -60,7 +62,7 @@ model = tf.keras.models.load_model('models/{}/{}.h5'.format(language_tag, model_
 print(model.summary())
 
 encoder_input = model.inputs[0]
-encoder_output, forward_last_h, forward_last_c, backward_last_h, backward_last_c = model.layers[3].output
+encoder_output, forward_last_h, forward_last_c, backward_last_h, backward_last_c = model.layers[4].output
 
 encoder_last_h = tf.keras.layers.Concatenate()([forward_last_h, backward_last_h])
 encoder_last_c = tf.keras.layers.Concatenate()([forward_last_c, backward_last_c])
@@ -68,17 +70,17 @@ encoder_last_c = tf.keras.layers.Concatenate()([forward_last_c, backward_last_c]
 encoder_model = tf.keras.Model(encoder_input, [encoder_output] + [encoder_last_h, encoder_last_c])
 
 decoder_input = model.inputs[1]
-decoder_state_input_h = tf.keras.Input(shape=(latent_dim*2,), name="input_3")
-decoder_state_input_c = tf.keras.Input(shape=(latent_dim*2,), name="input_4")
-encoder_stack_h = tf.keras.Input(shape=(None, latent_dim*2,), name="input_5")
+decoder_state_input_h = tf.keras.Input(shape=(latent_dim*4,), name="input_3")
+decoder_state_input_c = tf.keras.Input(shape=(latent_dim*4,), name="input_4")
+encoder_stack_h = tf.keras.Input(shape=(None, latent_dim*4,), name="input_5")
 decoder_states_inputs = [decoder_state_input_h, decoder_state_input_c]
-decoder = model.layers[7]
+decoder = model.layers[8]
 decoder_stack_h, decoder_last_h, decoder_last_c = decoder(
-    model.layers[4](decoder_input), initial_state=decoder_states_inputs
+    model.layers[5](decoder_input), initial_state=decoder_states_inputs
 )
-decoder_attention = model.layers[8]
-decoder_concatenate = model.layers[9]
-decoder_dense = model.layers[10]
+decoder_attention = model.layers[9]
+decoder_concatenate = model.layers[10]
+decoder_dense = model.layers[11]
 
 decoder_last = [decoder_last_h, decoder_last_c]
 context = decoder_attention([decoder_stack_h, encoder_stack_h])
@@ -108,8 +110,8 @@ def encode(text):
 def predict(input_sample):
     encoder_outputs, h, c = encoder_model.predict(input_sample)
     states_value = [h, c]
-    target_text = np.zeros((1, max_target_seq_len), dtype='int32')
-    target_text[0] = get_token_index(target_voc, sentinels[0])
+    target_text = np.zeros((1, 1), dtype='int32')
+    target_text[0, 0] = get_token_index(target_voc, sentinels[0])
 
     stop_condition = False
     predicted_tokens = list()
@@ -119,16 +121,18 @@ def predict(input_sample):
         sampled_token = np.argmax(output_tokens[0, -1, :])
         predicted_tokens.append(sampled_token)
 
-        if sampled_token == get_token_index(target_voc, sentinels[1]) or len(predicted_tokens) > max_target_seq_len:
+        if sampled_token == get_token_index(target_voc, sentinels[1]) \
+                or len(predicted_tokens) > max_target_seq_len:
             stop_condition = True
-        target_text[0] = sampled_token
+
+        target_text = np.zeros((1, 1), dtype='int32')
+        target_text[0, 0] = sampled_token
         states_value = [h, c]
     return predicted_tokens[:-1]
 
 
 for i in range(len(data)):
     source_text, target_text = data[i].split('\t')
-    encoded = encode(source_text)
-    result = predict(encoded)
+    result = predict(encode(source_text))
     predicted_text = ' '.join([target_voc[i] for i in result])
-    print('{} {}'.format(source_text, predicted_text))
+    print('\n{}\n{}'.format(source_text, predicted_text))
