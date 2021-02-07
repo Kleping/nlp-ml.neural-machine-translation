@@ -1,5 +1,6 @@
 
-model_name = 'nmt'
+language_tag = 'en'
+model_name = '{}/nmt_100_128_500_32'.format(language_tag)
 
 
 def get_concrete_function():
