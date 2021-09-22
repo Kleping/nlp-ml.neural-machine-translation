@@ -1,280 +1,341 @@
 import numpy as np
 import tensorflow as tf
 import random as rn
-import re
 import json
+import os
 
-validation_split = .3
+EPOCHS = 1
+BATCH_SIZE = 32
+LATENT_DIM = 128
+VS = 25000
+BATCH_SLICE = 64
 
-epochs = 100
-batch_size = 128
-coefficient = 500
-latent_dim = 32
+NAME_MODEL = 'nmt'
+NAME_TRAIN_DATA = 'encoded_data_train'
+NAME_VALID_DATA = 'encoded_data_valid'
 
-model_name = 'nmt_{}_{}_{}_{}'.format(epochs, batch_size, coefficient, latent_dim)
-num_data = coefficient*batch_size
+ROOT = ''
+ROOT_DATA = 'data/'
+ROOT_MODELS = 'models/'
 
-language_tag = 'en'
-data_path = 'data/{}/paired.txt'.format(language_tag)
-model_path = 'models/{}/{}.h5'.format(language_tag, model_name)
+PATH_LEARNING_STATE = '{}{}learning_state.config'.format(ROOT, ROOT_DATA)
+PATH_TRAIN_DATA = '{}{}{}.txt'.format(ROOT, ROOT_DATA, NAME_TRAIN_DATA)
+PATH_VALID_DATA = '{}{}{}.txt'.format(ROOT, ROOT_DATA, NAME_VALID_DATA)
+PATH_TRAIN_CONFIG = '{}{}{}.config'.format(ROOT, ROOT_DATA, NAME_TRAIN_DATA)
+PATH_VALID_CONFIG = '{}{}{}.config'.format(ROOT, ROOT_DATA, NAME_VALID_DATA)
+PATH_MODEL = '{}{}{}'.format(ROOT, ROOT_MODELS, NAME_MODEL)
 
-punctuation = ['!', '?', '.', ',']
-sentinels = ['<BOS>', '<EOS>']
-OOV_TOKEN = '<OOV>'
-PAD_TOKEN = '<PAD>'
-
-
-def split_with_keep_delimiters(text, delimiters):
-    return [
-        token for token in re.split('(' + '|'.join(map(re.escape, delimiters)) + ')', text) if token is not ''
-    ]
-
-
-def tokenize_text(text):
-    tokens = list()
-    for token in text.split():
-        if any(map(str.isdigit, token)):
-            if token[-1] in punctuation:
-                tokens.append(token[:-1])
-                tokens.append(token[-1])
-            else:
-                tokens.append(token)
-        else:
-            [tokens.append(splitted_token) for splitted_token in split_with_keep_delimiters(token, punctuation)]
-
-    return tokens
+ID_BOS = 1
+ID_EOS = 2
 
 
-def encode_target(text):
-    return '{} {} {}'.format(sentinels[0], text, sentinels[1])
+def init_learning_state():
+    _len_train = len(open(PATH_TRAIN_DATA, encoding='utf-8').readlines())
+    _len_valid = len(open(PATH_VALID_DATA, encoding='utf-8').readlines())
+
+    _range_train = list(range(_len_train))
+    _range_valid = list(range(_len_valid))
+
+    rn.shuffle(_range_train)
+    rn.shuffle(_range_valid)
+
+    with open(PATH_LEARNING_STATE, 'w', encoding='utf-8') as _f:
+        _data_learning_state = {
+            'reserve_train': _range_train,
+            'reserve_valid': _range_valid,
+            'len_train': _len_train,
+            'len_valid': _len_valid,
+            'epochs': 0,
+        }
+
+        json.dump(_data_learning_state, _f, ensure_ascii=False, indent=4)
+
+    return _data_learning_state
 
 
-def get_max_sample_length(data):
-    max_source = 0
-    max_target = 0
-    for sample in data:
-        source, target = sample.split('\t')
+def read_learning_state():
+    if os.path.isfile(PATH_LEARNING_STATE):
+        _learning_state = json.load(open(PATH_LEARNING_STATE, encoding='utf-8'))
+        _learning_state['reserve_valid'] = shuffle(list(range(_learning_state['len_valid'])))
+        print('learning state loaded')
+    else:
+        _learning_state = init_learning_state()
+        print('learning state created')
 
-        source_len = len(tokenize_text(source))
-        if source_len > max_source:
-            max_source = source_len
-
-        target_len = len(tokenize_text(encode_target(target)))
-        if target_len > max_target:
-            max_target = target_len
-
-    return max_source, max_target
+    return _learning_state
 
 
-def split_data(data):
-    data_validation = data[-int(validation_split * len(data)):]
-    data_train = data[:int(len(data) - len(data_validation))]
-    return data_train, data_validation[:len(data_validation)//2]
+def write_learning_state(_data_learning_state):
+    with open(PATH_LEARNING_STATE, 'w', encoding='utf-8') as _f:
+        json.dump(_data_learning_state, _f, ensure_ascii=False, indent=4)
+    print('learning state saved')
 
 
-def get_voc_from_data(data):
-    bag_of_words = list()
-    for sample in data:
-        source, _ = sample.split('\t')
-        tokenized_source = tokenize_text(source)
-        [bag_of_words.append(token) for token in tokenized_source if token not in bag_of_words]
-    source_v = (bag_of_words + [OOV_TOKEN])
-    target_v = (bag_of_words + sentinels + punctuation + [OOV_TOKEN])
-    rn.shuffle(source_v)
-    rn.shuffle(target_v)
-    return ([PAD_TOKEN] + source_v), ([PAD_TOKEN] + target_v)
+def shuffle(_data):
+    rn.shuffle(_data)
+    return _data
 
 
-def serialize_and_write_config(source, target, max_source_len, max_target_len, history):
-    config = {
-        'source': source,
-        'target': target,
-        'max_source_len': max_source_len,
-        'max_target_len': max_target_len,
-        'history': history
-    }
-    with open('models/{}/{}.config'.format(language_tag, model_name), 'w') as config_file:
-        json.dump(config, config_file, indent=4)
+def save_model(_path, _model, _learning_state):
+    write_learning_state(_learning_state)
+    tf.keras.models.save_model(_model, '{}.h5'.format(_path))
+    print('model saved')
+
+
+def load_model(_path):
+
+    if os.path.isfile('{}.h5'.format(_path)):
+        _model = tf.keras.models.load_model('{}.h5'.format(_path))
+        print('model loaded')
+    else:
+        _model = create_model()
+        print('model created')
+
+    _model = compile_model(_model)
+    return _model
+
+
+def encode(_x_collection, _y_collection, _batch_size, _max_x, _max_y):
+
+    _encoded_x = np.zeros((_batch_size, _max_x), dtype='int32')
+    _encoded_y = np.zeros((_batch_size, _max_y), dtype='int32')
+    _decoded_y = np.zeros((_batch_size, _max_y), dtype='int32')
+
+    # x encoding
+
+    for _i_sample, _x_sample in enumerate(_x_collection):
+        for _i_token, _x_id in enumerate(_x_sample.split(' ')):
+            _encoded_x[_i_sample, _i_token] = int(_x_id)
+
+    # DEBUGGING
+    # print(_x_collection[0])
+    # print(_encoded_x[0])
+    # print()
+
+    # y encoding
+
+    for _i_sample, _y_sample in enumerate(_y_collection):
+        for _i_token, _y_id in enumerate(_y_sample.split(' ')):
+            _encoded_y[_i_sample, _i_token] = int(_y_id)
+
+            if _i_token > 0:
+                _decoded_y[_i_sample, _i_token-1] = int(_y_id)
+
+    # DEBUGGING
+    # print(_y_collection[0])
+    # print(_encoded_y[0])
+    # print(_decoded_y[0])
+    # exit()
+
+    return [_encoded_x, _encoded_y], _decoded_y
+
+
+def encode_data_collection(_path_data, _batch, _batch_size, _max_x, _max_y):
+    _x_collection = list()
+    _y_collection = list()
+
+    _max_batch_value = max(_batch)
+
+    with open(_path_data, encoding='utf-8') as _f_data:
+        _lines = _f_data.readlines()
+        for _i in _batch:
+            _x_sample, _y_sample = _lines[_i].split('\t')
+            _x_collection.append(_x_sample)
+            _y_collection.append('{} {} {}'.format(ID_BOS, _y_sample, ID_EOS))
+
+    _x, _y = encode(_x_collection, _y_collection, _batch_size, _max_x, _max_y)
+    return _x, _y
+
+
+def read_valid_batch(_max_x, _max_y, _batch_size, _learning_state):
+    _reserve = _learning_state['reserve_valid']
+    _overridable_batch_size = _batch_size
+
+    if len(_reserve) >= _overridable_batch_size:
+        _batch = _reserve[:_overridable_batch_size]
+        _learning_state['reserve_valid'] = _reserve[_overridable_batch_size:]
+    elif len(_reserve) == 0:
+        _learning_state['reserve_valid'] = shuffle(list(range(_learning_state['len_valid'])))
+        return None, None, _learning_state
+    else:
+        _overridable_batch_size = len(_reserve)
+        _batch = _reserve
+        _learning_state['reserve_valid'] = []
+
+    _x, _y = encode_data_collection(PATH_VALID_DATA, _batch, _overridable_batch_size, _max_x, _max_y)
+    return _x, _y, _learning_state
+
+
+def read_train_batch(_max_x, _max_y, _batch_size, _learning_state):
+    _reserve = _learning_state['reserve_train']
+    _overridable_batch_size = _batch_size
+
+    if len(_reserve) >= _overridable_batch_size:
+        _batch = _reserve[:_overridable_batch_size]
+        _learning_state['reserve_train'] = _reserve[_overridable_batch_size:]
+    elif len(_reserve) == 0:
+        _range_data = shuffle(list(range(_learning_state['len_train'])))
+        _batch = _range_data[:_overridable_batch_size]
+        _learning_state['reserve_train'] = _range_data[_overridable_batch_size:]
+        _learning_state['epochs'] += 1
+    else:
+        _overridable_batch_size = len(_reserve)
+        _batch = _reserve
+        _learning_state['reserve_train'] = []
+
+    _x, _y = encode_data_collection(PATH_TRAIN_DATA, _batch, _overridable_batch_size, _max_x, _max_y)
+    return _x, _y, _learning_state
+
+
+def read_data_configs():
+    _config_train = json.load(open(PATH_TRAIN_CONFIG, encoding='utf-8'))
+    _config_valid = json.load(open(PATH_VALID_CONFIG, encoding='utf-8'))
+    return _config_train['max_x'], _config_train['max_y'] + 2, _config_valid['max_x'], _config_valid['max_y'] + 2
+
+
+def create_model():
+    encoder_inputs = tf.keras.Input(shape=(None,))
+    encoder_emb = tf.keras.layers.Embedding(VS, LATENT_DIM)(encoder_inputs)
+
+    encoder_0 = tf.keras.layers.Bidirectional(
+        tf.keras.layers.LSTM(
+            LATENT_DIM * 2,
+            return_sequences=True,
+            dropout=.4,
+            recurrent_dropout=.4
+        )
+    )
+
+    encoder_1 = tf.keras.layers.Bidirectional(
+        tf.keras.layers.LSTM(
+            LATENT_DIM * 2,
+            return_sequences=True,
+            dropout=.4,
+            recurrent_dropout=.4
+        )
+    )
+
+    encoder_2 = tf.keras.layers.Bidirectional(
+        tf.keras.layers.LSTM(
+            LATENT_DIM * 2,
+            return_sequences=True,
+            dropout=.4,
+            recurrent_dropout=.4
+        )
+    )
+
+    encoder_last = tf.keras.layers.Bidirectional(
+        tf.keras.layers.LSTM(
+            LATENT_DIM * 2,
+            return_sequences=True,
+            return_state=True,
+            dropout=.4,
+            recurrent_dropout=.4
+        )
+    )
+
+    encoder_output_0 = encoder_0(encoder_emb)
+    encoder_output_1 = encoder_1(encoder_output_0)
+    encoder_output_2 = encoder_2(encoder_output_1)
+    encoder_stack, forward_h, forward_c, backward_h, backward_c = encoder_last(encoder_output_2)
+
+    encoder_last_h = tf.keras.layers.Concatenate()([forward_h, backward_h])
+    encoder_last_c = tf.keras.layers.Concatenate()([forward_c, backward_c])
+
+    encoder_states = [encoder_last_h, encoder_last_c]
+
+    decoder_inputs = tf.keras.Input(shape=(None,))
+    decoder_emb = tf.keras.layers.Embedding(VS, LATENT_DIM)(decoder_inputs)
+
+    decoder = tf.keras.layers.LSTM(
+        LATENT_DIM * 4,
+        return_sequences=True,
+        return_state=True,
+        dropout=.4,
+        recurrent_dropout=.4
+    )
+
+    decoder_stack_h, _, _ = decoder(decoder_emb, initial_state=encoder_states)
+
+    context = tf.keras.layers.Attention()([decoder_stack_h, encoder_stack])
+    decoder_concat_input = tf.keras.layers.concatenate([context, decoder_stack_h])
+
+    dense = tf.keras.layers.Dense(VS, activation='softmax')
+    decoder_stack_h = tf.keras.layers.TimeDistributed(dense)(decoder_concat_input)
+
+    return tf.keras.Model([encoder_inputs, decoder_inputs], decoder_stack_h)
 
 
 def compile_model(m):
-    optimizer = tf.keras.optimizers.Adam()
+    _optimizer = tf.keras.optimizers.Adam()
+    _loss = tf.keras.losses.SparseCategoricalCrossentropy()
+    _metric = tf.keras.metrics.SparseCategoricalAccuracy()
 
-    m.compile(
-        optimizer=optimizer, loss='sparse_categorical_crossentropy', metrics=['accuracy']
-    )
+    m.compile(optimizer=_optimizer, loss=_loss, metrics=[_metric])
+    print('model compiled')
     return m
 
 
-with open(data_path, 'r', encoding='utf-8') as f:
-    data = f.read().split('\n')[:num_data]
-
-rn.shuffle(data)
-data_train, data_valid = split_data(data)
-max_source_len, max_target_len = get_max_sample_length(data_train + data_valid)
-source_voc, target_voc = get_voc_from_data(data_train)
-
-print()
-print('len(data):', len(data))
-print('max_source_len:', max_source_len)
-print('max_target_len:', max_target_len)
-# print('source_voc:', source_voc)
-# print('target_voc:', target_voc)
-print('len(source_voc):', len(source_voc))
-print('len(target_voc):', len(target_voc))
-print()
+max_x_train, max_y_train, max_x_valid, max_y_valid = read_data_configs()
+model = load_model(PATH_MODEL)
+# print(model.summary())
 
 
-class DataSupplier(tf.keras.utils.Sequence):
-    def __init__(self, batch_size, max_source_seq_len, max_target_seq_len, data, source_voc, target_voc):
-        self.batch_size = batch_size
-        self.data = data
-        self.source_voc = source_voc
-        self.target_voc = target_voc
-        self.max_source_seq_len = max_source_seq_len
-        self.max_target_seq_len = max_target_seq_len
-        if self.data is not None:
-            rn.shuffle(self.data)
+learning_state = read_learning_state()
 
-    def __len__(self):
-        return int(np.floor(len(self.data) / self.batch_size))
+while learning_state < EPOCHS:
 
-    def __getitem__(self, ndx):
-        source, target = self.extract_batch(ndx, self.batch_size, self.data)
-        return self.encode_data(source, target)
-
-    def on_epoch_end(self):
-        rn.shuffle(self.data)
-
-    # secondary auxiliary methods
-    @staticmethod
-    def get_token_index(voc, token):
-        if token in voc:
-            voc_i = voc.index(token)
-        else:
-            voc_i = voc.index(OOV_TOKEN)
-        return voc_i
-
-    def encode_data(self, source, target):
-        encoder_input_data = np.zeros(
-            (len(source), self.max_source_seq_len), dtype='int32'
-        )
-        decoder_input_data = np.zeros(
-            (len(target), self.max_target_seq_len), dtype='int32'
-        )
-        decoder_target_data = np.zeros(
-            (len(target), self.max_target_seq_len), dtype='int32'
-        )
-
-        for i, (source_text, target_text) in enumerate(zip(source, target)):
-            for t, token in enumerate(tokenize_text(source_text)):
-                encoder_input_data[i, t] = self.get_token_index(self.source_voc, token)
-
-            for t, token in enumerate(tokenize_text(target_text)):
-                token_ndx = self.get_token_index(self.target_voc, token)
-                decoder_input_data[i, t] = token_ndx
-                if t > 0:
-                    decoder_target_data[i, t - 1] = token_ndx
-
-            # It's only a debug representation
-            # print('\n{}'.format(' '.join([source_voc[token] for token in encoder_input_data[i]])))
-            # print('{}'.format(' '.join([target_voc[token] for token in decoder_target_data[i]])))
-
-        return [encoder_input_data, decoder_input_data], decoder_target_data
-
-    @staticmethod
-    def append_sample(sample, source, target):
-        source_item, target_item = sample.split('\t')
-        source.append(source_item)
-        target.append(encode_target(target_item))
-        return source, target
-
-    def extract_batch(self, ndx, batch_size, data):
-        source = []
-        target = []
-        ndx_from = ndx * batch_size
-        ndx_to = min(ndx * batch_size + batch_size, len(data))
-
-        for sample in data[ndx_from: ndx_to]:
-            source, target = self.append_sample(sample, source, target)
-
-        if ndx_to % batch_size != 0:
-            for sample in rn.sample(data[:ndx_from], batch_size - len(data) % batch_size):
-                source, target = self.append_sample(sample, source, target)
-
-        return source, target
+    if len(learning_state['reserve_train']) > 0:
+        x_train, y_train, learning_state = read_train_batch(max_x_train, max_y_train, BATCH_SIZE, learning_state)
 
 
-encoder_inputs = tf.keras.Input(shape=(None,))
-encoder_emb = tf.keras.layers.Embedding(len(source_voc), latent_dim)(encoder_inputs)
+shifted_batch_counter = batch_counter_train = 0
+batch_counter_valid = 0
+loss_train = acc_train = loss_valid = acc_valid = .0
+current_epoch = -1
 
-encoder = tf.keras.layers.Bidirectional(
-    tf.keras.layers.LSTM(
-        latent_dim,
-        return_sequences=True,
-        recurrent_dropout=.1
-    )
-)
 
-encoder_secondary = tf.keras.layers.Bidirectional(
-    tf.keras.layers.LSTM(
-        latent_dim*2,
-        return_sequences=True,
-        return_state=True,
-        recurrent_dropout=.1
-    )
-)
+while current_epoch < EPOCHS:
+    x_train, y_train, learning_state = read_train_batch(max_x_train, max_y_train, BATCH_SIZE, learning_state)
 
-encoder_stack_h = encoder(encoder_emb)
-encoder_secondary_stack_h, forward_last_h, forward_last_c, backward_last_h, backward_last_c \
-    = encoder_secondary(encoder_stack_h)
+    if current_epoch == -1:
+        len_reserve_train = len(learning_state['reserve_train'])
+        diff = learning_state['len_train'] - len_reserve_train
+        if diff != 0:
+            shifted_batch_counter = diff / BATCH_SIZE - 1
 
-encoder_last_h = tf.keras.layers.Concatenate()([forward_last_h, backward_last_h])
-encoder_last_c = tf.keras.layers.Concatenate()([forward_last_c, backward_last_c])
+        current_epoch = learning_state['epochs']
 
-encoder_states = [encoder_last_h, encoder_last_c]
+    if current_epoch != learning_state['epochs']:
+        x_valid, y_valid, learning_state = read_valid_batch(max_x_valid, max_y_valid, BATCH_SIZE, learning_state)
+        batch_counter_valid += 1
 
-decoder_inputs = tf.keras.Input(shape=(None,))
-decoder_emb = tf.keras.layers.Embedding(len(target_voc), latent_dim)(decoder_inputs)
-decoder = tf.keras.layers.LSTM(latent_dim*4, return_sequences=True, return_state=True)
-decoder_stack_h, _, _ = decoder(decoder_emb, initial_state=encoder_states)
+        b = int(learning_state['len_valid'] / BATCH_SIZE) + (0 if learning_state['len_valid'] % BATCH_SIZE == 0 else 1)
+        print('{}\t\t{}'.format(batch_counter_valid, b))
 
-context = tf.keras.layers.Attention()([decoder_stack_h, encoder_secondary_stack_h])
-decoder_concat_input = tf.keras.layers.concatenate([context, decoder_stack_h])
+        while x_valid is not None and y_valid is not None:
+            loss_valid, acc_valid = model.test_on_batch(x_valid, y_valid, reset_metrics=False)
+            x_valid, y_valid, learning_state = read_valid_batch(max_x_valid, max_y_valid, BATCH_SIZE, learning_state)
+            batch_counter_valid += 1
+            print('{}\t\t{}'.format(batch_counter_valid, b))
 
-dense = tf.keras.layers.Dense(len(target_voc), activation='softmax')
-decoder_stack_h = tf.keras.layers.TimeDistributed(dense)(decoder_concat_input)
+        print('{} [{:.5f} {:.5f}]\t[{:.5f} {:.5f}]\n'
+              .format(current_epoch, loss_train, acc_train, loss_valid, acc_valid))
 
-model = tf.keras.Model([encoder_inputs, decoder_inputs], decoder_stack_h)
-model = compile_model(model)
+        batch_counter_train = 0
+        shifted_batch_counter = 0
+        model.reset_metrics()
 
-train_supplier = DataSupplier(
-    batch_size,
-    max_source_len,
-    max_target_len,
-    data_train,
-    source_voc,
-    target_voc
-)
+    loss_train, acc_train = model.train_on_batch(x_train, y_train, reset_metrics=False)
 
-valid_supplier = DataSupplier(
-    batch_size,
-    max_source_len,
-    max_target_len,
-    data_valid,
-    source_voc,
-    target_voc
-)
+    if current_epoch != learning_state['epochs']:
+        save_model(PATH_MODEL, model, learning_state)
+        current_epoch = learning_state['epochs']
 
-es = tf.keras.callbacks.EarlyStopping(monitor='val_loss', min_delta=0, patience=5, verbose=0, mode='auto')
+    batch_counter_train += 1
 
-history = model.fit(
-    train_supplier,
-    validation_data=valid_supplier,
-    epochs=epochs,
-    shuffle=True,
-    callbacks=[es]
-).history
-
-model.save(model_path)
-serialize_and_write_config(source_voc, target_voc, max_source_len, max_target_len, history)
+    a = int(batch_counter_train + shifted_batch_counter)
+    b = int(learning_state['len_train'] / BATCH_SIZE) + (0 if learning_state['len_train'] % BATCH_SIZE == 0 else 1)
+    if a % BATCH_SLICE == 0 or a == b:
+        print('{} of {}\t{:.5f}\t{:.5f}'.format(a, b, loss_train, acc_train))
+        save_model(PATH_MODEL, model, learning_state)
