@@ -4,11 +4,11 @@ import random as rn
 import json
 import os
 
-EPOCHS = 1
-BATCH_SIZE = 32
+EPOCHS = 10
+BATCH_SIZE = 1
 LATENT_DIM = 128
 VS = 25000
-BATCH_SLICE = 64
+BATCH_SLICE = 2
 
 NAME_MODEL = 'nmt'
 NAME_TRAIN_DATA = 'encoded_data_train'
@@ -29,15 +29,17 @@ ID_BOS = 1
 ID_EOS = 2
 
 
+def create_range(_path):
+    _len = len(open(_path, encoding='utf-8').readlines()[:20])
+    _range = list(range(_len))
+    rn.shuffle(_range)
+    return _range, _len
+
+
 def init_learning_state():
-    _len_train = len(open(PATH_TRAIN_DATA, encoding='utf-8').readlines())
-    _len_valid = len(open(PATH_VALID_DATA, encoding='utf-8').readlines())
 
-    _range_train = list(range(_len_train))
-    _range_valid = list(range(_len_valid))
-
-    rn.shuffle(_range_train)
-    rn.shuffle(_range_valid)
+    _range_train, _len_train = create_range(PATH_TRAIN_DATA)
+    _range_valid, _len_valid = create_range(PATH_VALID_DATA)
 
     with open(PATH_LEARNING_STATE, 'w', encoding='utf-8') as _f:
         _data_learning_state = {
@@ -46,6 +48,8 @@ def init_learning_state():
             'len_train': _len_train,
             'len_valid': _len_valid,
             'epochs': 0,
+            'history_train': [],
+            'history_valid': [],
         }
 
         json.dump(_data_learning_state, _f, ensure_ascii=False, indent=4)
@@ -65,9 +69,9 @@ def read_learning_state():
     return _learning_state
 
 
-def write_learning_state(_data_learning_state):
+def write_learning_state(_data):
     with open(PATH_LEARNING_STATE, 'w', encoding='utf-8') as _f:
-        json.dump(_data_learning_state, _f, ensure_ascii=False, indent=4)
+        json.dump(_data, _f, ensure_ascii=False, indent=4)
     print('learning state saved')
 
 
@@ -80,6 +84,11 @@ def save_model(_path, _model, _learning_state):
     write_learning_state(_learning_state)
     tf.keras.models.save_model(_model, '{}.h5'.format(_path))
     print('model saved')
+
+
+def reset_metrics(_model):
+    _model.reset_metrics()
+    print('metrics model reset')
 
 
 def load_model(_path):
@@ -277,65 +286,76 @@ def compile_model(m):
 
 
 max_x_train, max_y_train, max_x_valid, max_y_valid = read_data_configs()
+learning_state = read_learning_state()
+exit()
 model = load_model(PATH_MODEL)
 # print(model.summary())
 
+while learning_state['epochs'] < EPOCHS:
+    len_reserve_train = len(learning_state['reserve_train'])
 
-learning_state = read_learning_state()
+    if len_reserve_train > 0:
 
-while learning_state < EPOCHS:
+        if len_reserve_train == learning_state['len_train']:
+            reset_metrics(model)
 
-    if len(learning_state['reserve_train']) > 0:
-        x_train, y_train, learning_state = read_train_batch(max_x_train, max_y_train, BATCH_SIZE, learning_state)
+        current_batch_size = min(BATCH_SIZE, len_reserve_train)
+        batch_train = learning_state['reserve_train'][:current_batch_size]
 
+        x_train, y_train = encode_data_collection(
+            PATH_TRAIN_DATA, batch_train, current_batch_size, max_x_train, max_y_train
+        )
 
-shifted_batch_counter = batch_counter_train = 0
-batch_counter_valid = 0
-loss_train = acc_train = loss_valid = acc_valid = .0
-current_epoch = -1
+        metrics_train = model.train_on_batch(x_train, y_train, reset_metrics=False)
+        learning_state['reserve_train'] = learning_state['reserve_train'][current_batch_size:]
 
+        post_len_reserve_train = len(learning_state['reserve_train'])
 
-while current_epoch < EPOCHS:
-    x_train, y_train, learning_state = read_train_batch(max_x_train, max_y_train, BATCH_SIZE, learning_state)
+        extra_batch = 1 if learning_state['len_train'] % BATCH_SIZE != 0 else 0
+        trained_samples = learning_state['len_train'] - post_len_reserve_train
+        overall_batches = int(learning_state['len_train'] / BATCH_SIZE) + extra_batch
+        trained_batches = overall_batches if post_len_reserve_train == 0 else int(trained_samples / BATCH_SIZE)
 
-    if current_epoch == -1:
-        len_reserve_train = len(learning_state['reserve_train'])
-        diff = learning_state['len_train'] - len_reserve_train
-        if diff != 0:
-            shifted_batch_counter = diff / BATCH_SIZE - 1
+        print('{}\t{} - {}\t{:.5f}\t{:.5f}'.format(
+            learning_state['epochs'], trained_batches, overall_batches, metrics_train[0], metrics_train[1])
+        )
 
-        current_epoch = learning_state['epochs']
+        if post_len_reserve_train == 0:
+            learning_state['history_train'].append(metrics_train)
+            learning_state['history_valid'].append([0.0, 0.0])
 
-    if current_epoch != learning_state['epochs']:
-        x_valid, y_valid, learning_state = read_valid_batch(max_x_valid, max_y_valid, BATCH_SIZE, learning_state)
-        batch_counter_valid += 1
+        if post_len_reserve_train == 0 or trained_batches % BATCH_SLICE == 0:
+            save_model(PATH_MODEL, model, learning_state)
 
-        b = int(learning_state['len_valid'] / BATCH_SIZE) + (0 if learning_state['len_valid'] % BATCH_SIZE == 0 else 1)
-        print('{}\t\t{}'.format(batch_counter_valid, b))
+        continue
 
-        while x_valid is not None and y_valid is not None:
-            loss_valid, acc_valid = model.test_on_batch(x_valid, y_valid, reset_metrics=False)
-            x_valid, y_valid, learning_state = read_valid_batch(max_x_valid, max_y_valid, BATCH_SIZE, learning_state)
-            batch_counter_valid += 1
-            print('{}\t\t{}'.format(batch_counter_valid, b))
+    len_reserve_valid = len(learning_state['reserve_valid'])
 
-        print('{} [{:.5f} {:.5f}]\t[{:.5f} {:.5f}]\n'
-              .format(current_epoch, loss_train, acc_train, loss_valid, acc_valid))
+    if len_reserve_valid > 0:
 
-        batch_counter_train = 0
-        shifted_batch_counter = 0
-        model.reset_metrics()
+        if len_reserve_valid == learning_state['len_valid']:
+            reset_metrics(model)
 
-    loss_train, acc_train = model.train_on_batch(x_train, y_train, reset_metrics=False)
+        current_batch_size = min(BATCH_SIZE, len_reserve_valid)
+        batch_valid = learning_state['reserve_valid'][:current_batch_size]
 
-    if current_epoch != learning_state['epochs']:
-        save_model(PATH_MODEL, model, learning_state)
-        current_epoch = learning_state['epochs']
+        x_valid, y_valid = encode_data_collection(
+            PATH_VALID_DATA, batch_valid, current_batch_size, max_x_valid, max_y_valid
+        )
 
-    batch_counter_train += 1
+        metrics_valid = model.test_on_batch(x_valid, y_valid, reset_metrics=False)
+        learning_state['reserve_valid'] = learning_state['reserve_valid'][current_batch_size:]
 
-    a = int(batch_counter_train + shifted_batch_counter)
-    b = int(learning_state['len_train'] / BATCH_SIZE) + (0 if learning_state['len_train'] % BATCH_SIZE == 0 else 1)
-    if a % BATCH_SLICE == 0 or a == b:
-        print('{} of {}\t{:.5f}\t{:.5f}'.format(a, b, loss_train, acc_train))
-        save_model(PATH_MODEL, model, learning_state)
+        post_len_reserve_valid = len(learning_state['reserve_valid'])
+
+        if post_len_reserve_valid > 0:
+            continue
+
+        print('{:.5f}\t{:.5f}'.format(metrics_valid[0], metrics_valid[1]))
+        range_train, _ = create_range(PATH_TRAIN_DATA)
+        range_valid, _ = create_range(PATH_VALID_DATA)
+        learning_state['epochs'] += 1
+        learning_state['reserve_train'] = range_train
+        learning_state['reserve_valid'] = range_valid
+        learning_state['history_valid'][-1] = metrics_valid
+        write_learning_state(learning_state)
