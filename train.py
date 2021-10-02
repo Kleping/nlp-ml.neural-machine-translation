@@ -3,20 +3,23 @@ import tensorflow as tf
 import random as rn
 import json
 import os
+from tensorflow.keras.layers import LSTM, Bidirectional, Embedding, Attention, Concatenate, concatenate, Dense, TimeDistributed
+from tensorflow.keras import Input, Model
 
-EPOCHS = 10
-BATCH_SIZE = 1
-LATENT_DIM = 32
+EPOCHS = 50
+BATCH_SIZE = 32
+UNITS = 512
+OUTPUT_DIM = 32
 VS = 25000
-BATCH_SLICE = 2
+BATCH_SLICE = 128
 
 NAME_MODEL = 'nmt'
 NAME_TRAIN_DATA = 'encoded_data_train'
 NAME_VALID_DATA = 'encoded_data_valid'
 
-ROOT = ''
-ROOT_DATA = 'data/'
-ROOT_MODELS = 'models/'
+ROOT = '/content/drive/MyDrive/Learning/'
+ROOT_DATA = ''
+ROOT_MODELS = ''
 
 PATH_LEARNING_STATE = '{}{}learning_state.config'.format(ROOT, ROOT_DATA)
 PATH_TRAIN_DATA = '{}{}{}.txt'.format(ROOT, ROOT_DATA, NAME_TRAIN_DATA)
@@ -30,14 +33,13 @@ ID_EOS = 2
 
 
 def create_range(_path):
-    _len = len(open(_path, encoding='utf-8').readlines()[:20])
+    _len = len(open(_path, encoding='utf-8').readlines())
     _range = list(range(_len))
     rn.shuffle(_range)
     return _range, _len
 
 
 def init_learning_state():
-
     _range_train, _len_train = create_range(PATH_TRAIN_DATA)
     _range_valid, _len_valid = create_range(PATH_VALID_DATA)
 
@@ -72,7 +74,7 @@ def read_learning_state():
 def write_learning_state(_data):
     with open(PATH_LEARNING_STATE, 'w', encoding='utf-8') as _f:
         json.dump(_data, _f, ensure_ascii=False, indent=4)
-    print('learning state saved')
+    # print('learning state saved')
 
 
 def shuffle(_data):
@@ -83,16 +85,15 @@ def shuffle(_data):
 def save_model(_path, _model, _learning_state):
     write_learning_state(_learning_state)
     tf.keras.models.save_model(_model, '{}.h5'.format(_path))
-    print('model saved')
+    # print('model saved')
 
 
 def reset_metrics(_model):
     _model.reset_metrics()
-    print('metrics model reset')
+    # print('metrics model reset')
 
 
 def load_model(_path):
-
     if os.path.isfile('{}.h5'.format(_path)):
         _model = tf.keras.models.load_model('{}.h5'.format(_path))
         print('model loaded')
@@ -105,7 +106,6 @@ def load_model(_path):
 
 
 def encode(_x_collection, _y_collection, _batch_size, _max_x, _max_y):
-
     _encoded_x = np.zeros((_batch_size, _max_x), dtype='int32')
     _encoded_y = np.zeros((_batch_size, _max_y), dtype='int32')
     _decoded_y = np.zeros((_batch_size, _max_y), dtype='int32')
@@ -128,7 +128,7 @@ def encode(_x_collection, _y_collection, _batch_size, _max_x, _max_y):
             _encoded_y[_i_sample, _i_token] = int(_y_id)
 
             if _i_token > 0:
-                _decoded_y[_i_sample, _i_token-1] = int(_y_id)
+                _decoded_y[_i_sample, _i_token - 1] = int(_y_id)
 
     # DEBUGGING
     # print(_y_collection[0])
@@ -202,60 +202,48 @@ def read_data_configs():
     return _config_train['max_x'], _config_train['max_y'] + 2, _config_valid['max_x'], _config_valid['max_y'] + 2
 
 
-def create_bi_lstm_layer():
-    from tensorflow.keras.constraints import max_norm
-    return tf.keras.layers.Bidirectional(tf.compat.v1.keras.layers.CuDNNLSTM(
-        LATENT_DIM,
-        return_sequences=True,
-        kernel_constraint=max_norm(3),
-        recurrent_constraint=max_norm(3),
-        bias_constraint=max_norm(3)
-    ))
-
-
 def create_model():
-    encoder_inputs = tf.keras.Input(shape=(None,))
+    encoder_input = Input(shape=(None,))
+    encoder_emb = Embedding(VS, OUTPUT_DIM)(encoder_input)
 
-    encoder_emb = tf.keras.layers.Embedding(VS, LATENT_DIM)(encoder_inputs)
-    encoder_normalized = tf.keras.layers.BatchNormalization()(encoder_emb)
-
-    encoder = tf.keras.layers.Bidirectional(tf.compat.v1.keras.layers.CuDNNLSTM(
-        LATENT_DIM,
+    encoder = Bidirectional(LSTM(
+        UNITS,
         return_sequences=True,
         return_state=True,
-    ))
+    ), name='encoder')
 
-    encoder_output_0 = create_bi_lstm_layer()(encoder_normalized)
-    encoder_output_1 = create_bi_lstm_layer()(encoder_output_0)
+    encoder_output_0 = Bidirectional(LSTM(
+        UNITS,
+        return_sequences=True,
+    ))(encoder_emb)
 
-    encoder_stack, forward_h, forward_c, backward_h, backward_c = encoder(encoder_output_1)
-
-    encoder_h = tf.keras.layers.Concatenate()([forward_h, backward_h])
-    encoder_c = tf.keras.layers.Concatenate()([forward_c, backward_c])
+    encoder_stack, forward_h, forward_c, backward_h, backward_c = encoder(encoder_output_0)
+    encoder_h = Concatenate()([forward_h, backward_h])
+    encoder_c = Concatenate()([forward_c, backward_c])
 
     encoder_states = [encoder_h, encoder_c]
 
-    decoder_inputs = tf.keras.Input(shape=(None,))
-    decoder_emb = tf.keras.layers.Embedding(VS, LATENT_DIM)(decoder_inputs)
-    decoder_normalized = tf.keras.layers.BatchNormalization()(decoder_emb)
-    decoder = tf.compat.v1.keras.layers.CuDNNLSTM(
-        LATENT_DIM * 2,
+    decoder_input = Input(shape=(None,))
+    decoder_emb = Embedding(VS, OUTPUT_DIM, name='decoder_embedding')(decoder_input)
+    decoder = LSTM(
+        UNITS * 2,
         return_sequences=True,
         return_state=True,
+        name='decoder',
     )
 
-    decoder_stack_h, _, _ = decoder(decoder_normalized, initial_state=encoder_states)
+    decoder_stack_h, _, _ = decoder(decoder_emb, initial_state=encoder_states)
 
-    context = tf.keras.layers.Attention()([decoder_stack_h, encoder_stack])
-    decoder_concat_input = tf.keras.layers.concatenate([context, decoder_stack_h])
+    context = Attention(name='attention')([decoder_stack_h, encoder_stack])
+    decoder_concat_input = concatenate([context, decoder_stack_h], name='concatenate')
 
-    dense = tf.keras.layers.Dense(
+    dense = Dense(
         VS,
         activation='softmax',
     )
 
-    decoder_stack_h = tf.keras.layers.TimeDistributed(dense)(decoder_concat_input)
-    return tf.keras.Model([encoder_inputs, decoder_inputs], decoder_stack_h)
+    decoder_stack_h = TimeDistributed(dense, name='dense')(decoder_concat_input)
+    return Model([encoder_input, decoder_input], decoder_stack_h)
 
 
 def compile_model(m):
@@ -298,16 +286,14 @@ while learning_state['epochs'] < EPOCHS:
         overall_batches = int(learning_state['len_train'] / BATCH_SIZE) + extra_batch
         trained_batches = overall_batches if post_len_reserve_train == 0 else int(trained_samples / BATCH_SIZE)
 
-        if trained_batches % int(BATCH_SLICE / 2) == 0:
-            print('{}\t{} - {}\t{:.5f}\t{:.5f}'.format(
-                learning_state['epochs'], trained_batches, overall_batches, metrics_train[0], metrics_train[1])
-            )
-
         if post_len_reserve_train == 0:
             learning_state['history_train'].append(metrics_train)
             learning_state['history_valid'].append([0.0, 0.0])
 
         if post_len_reserve_train == 0 or trained_batches % BATCH_SLICE == 0:
+            print('{}\t{} - {}\t{:.5f}\t{:.5f}'.format(
+                learning_state['epochs'], trained_batches, overall_batches, metrics_train[0], metrics_train[1])
+            )
             save_model(PATH_MODEL, model, learning_state)
 
         continue
